@@ -1,0 +1,1685 @@
+
+################################################################################
+### FILE: scripts/00_devtools.sh
+################################################################################
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Teclast P20HD postmarketOS port - development environment bootstrap
+# Idempotent: safe to run multiple times.
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
+echo "=== Teclast P20HD Development Environment Setup ==="
+echo "Project directory: $PROJECT_DIR"
+
+echo "[1/7] Updating system packages..."
+sudo apt update
+sudo apt upgrade -y
+
+echo "[2/7] Installing base development tools..."
+sudo apt install -y \
+  git curl wget vim nano \
+  build-essential \
+  bc bison flex \
+  libssl-dev libncurses-dev libelf-dev \
+  python3 python3-pip python3-venv \
+  p7zip-full unrar \
+  tree jq \
+  e2fsprogs \
+  file \
+  rsync
+
+echo "[3/7] Installing Android tools..."
+sudo apt install -y \
+  android-tools-adb \
+  android-tools-fastboot \
+  android-sdk-libsparse-utils
+
+echo "[4/7] Installing boot/kernel analysis tools..."
+sudo apt install -y \
+  device-tree-compiler \
+  u-boot-tools \
+  abootimg \
+  binwalk \
+  cpio gzip bzip2 lz4 xz-utils \
+  unzip zip
+
+echo "[5/7] Installing cross compilation tools..."
+sudo apt install -y \
+  gcc-aarch64-linux-gnu \
+  g++-aarch64-linux-gnu
+
+echo "[6/7] Installing Python tools..."
+python3 -m pip install --user --upgrade pip
+python3 -m pip install --user --upgrade \
+  extract-dtb \
+  pycryptodome
+
+# Ensure ~/.local/bin is available
+if ! grep -q 'export PATH="$HOME/.local/bin:$PATH"' ~/.bashrc; then
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> ~/.bashrc
+fi
+export PATH="$HOME/.local/bin:$PATH"
+
+echo ""
+echo "==> Creating workspace structure..."
+mkdir -p "$PROJECT_DIR"/{firmware,backup,extracted,modified,output,scripts,tools,device-info}
+
+# -----------------------------------------------------------------------------#
+# AIK (Android Image Kitchen — boot image unpack/repack toolkit)
+# -----------------------------------------------------------------------------#
+AIK_REPO="https://github.com/ndrancs/AIK-Linux-x32-x64.git"
+
+echo ""
+echo "==> Setting up AIK (Android Image Kitchen — boot image unpack/repack toolkit)..."
+if [[ ! -d "$PROJECT_DIR/AIK/.git" ]]; then
+  rm -rf "$PROJECT_DIR/AIK"
+  git clone "$AIK_REPO" "$PROJECT_DIR/AIK"
+else
+  ( cd "$PROJECT_DIR/AIK" && git pull )
+fi
+chmod +x "$PROJECT_DIR"/AIK/*.sh || true
+
+# Patch stray 'return' if present (harmless but noisy)
+if grep -qE '^[[:space:]]*return[[:space:]]*$' "$PROJECT_DIR/AIK/unpackimg_x64.sh" 2>/dev/null; then
+  echo "==> Patching AIK unpackimg_x64.sh: replacing stray 'return' with 'exit 0'..."
+  sed -i -E 's/^[[:space:]]*return[[:space:]]*$/exit 0/' "$PROJECT_DIR/AIK/unpackimg_x64.sh"
+fi
+
+# -----------------------------------------------------------------------------#
+# pacextractor (Spreadtrum/UNISOC .pac extractor)
+# -----------------------------------------------------------------------------#
+echo ""
+echo "==> Setting up pacextractor (Spreadtrum/UNISOC .pac extractor)..."
+if [[ ! -d "$PROJECT_DIR/tools/pacextractor/.git" ]]; then
+  git clone https://github.com/divinebird/pacextractor.git "$PROJECT_DIR/tools/pacextractor"
+else
+  ( cd "$PROJECT_DIR/tools/pacextractor" && git pull )
+fi
+( cd "$PROJECT_DIR/tools/pacextractor" && make )
+
+# -----------------------------------------------------------------------------#
+# partition_tools (lpunpack/lpmake — Android Logical Partitions utilities)
+# -----------------------------------------------------------------------------#
+echo ""
+echo "==> Ensuring lpunpack/lpmake (Logical Partitions tools) are available..."
+
+need_tools=0
+for t in lpunpack lpmake; do
+  if ! command -v "$t" >/dev/null 2>&1; then
+    need_tools=1
+  fi
+done
+
+if [[ "$need_tools" -eq 1 ]]; then
+  echo "[*] lpunpack/lpmake not found in PATH. Installing local copies into ~/.local/bin ..."
+
+  mkdir -p "$PROJECT_DIR/tools"
+  mkdir -p "$HOME/.local/bin"
+
+  # ---- Option A: try to build from LonelyFool (source) ----
+  LF_REPO="https://github.com/LonelyFool/lpunpack_and_lpmake.git"
+  LF_DIR="$PROJECT_DIR/tools/lpunpack_and_lpmake"
+
+  echo "[*] Attempting source-based setup: $LF_REPO"
+  if [[ ! -d "$LF_DIR/.git" ]]; then
+    rm -rf "$LF_DIR"
+    git clone "$LF_REPO" "$LF_DIR" || true
+  else
+    ( cd "$LF_DIR" && git pull ) || true
+  fi
+
+  # Try build scripts if present
+  if [[ -d "$LF_DIR" ]]; then
+    if [[ -x "$LF_DIR/make.sh" ]]; then
+      echo "[*] Running LonelyFool make.sh ..."
+      ( cd "$LF_DIR" && bash ./make.sh ) || true
+    elif [[ -f "$LF_DIR/Makefile" ]]; then
+      echo "[*] Running make ..."
+      ( cd "$LF_DIR" && make ) || true
+    fi
+  fi
+
+  # Try to locate built binaries
+  copied_any=0
+  for bin in lpunpack lpmake lpdump lpflash; do
+    src="$(find "$LF_DIR" -maxdepth 5 -type f -name "$bin" -perm -111 2>/dev/null | head -n 1 || true)"
+    if [[ -n "$src" ]]; then
+      echo "[*] Installing $bin from source build: $src"
+      install -m 0755 "$src" "$HOME/.local/bin/$bin"
+      copied_any=1
+    fi
+  done
+
+  # ---- Option B: fallback to prebuilt static tools ----
+  if [[ "$copied_any" -eq 0 ]]; then
+    echo "[*] Source build did not yield binaries. Falling back to prebuilt tools..."
+
+    PREBUILT_REPO="https://github.com/Rprop/aosp15_partition_tools.git"
+    PREBUILT_DIR="$PROJECT_DIR/tools/aosp15_partition_tools"
+
+    if [[ ! -d "$PREBUILT_DIR/.git" ]]; then
+      rm -rf "$PREBUILT_DIR"
+      git clone "$PREBUILT_REPO" "$PREBUILT_DIR"
+    else
+      ( cd "$PREBUILT_DIR" && git pull )
+    fi
+
+    if [[ -d "$PREBUILT_DIR/linux_glibc_x86_64" ]]; then
+      echo "[*] Installing prebuilt partition_tools into ~/.local/bin ..."
+      for bin in lpunpack lpmake lpdump lpflash ext2simg simg2img; do
+        if [[ -f "$PREBUILT_DIR/linux_glibc_x86_64/$bin" ]]; then
+          install -m 0755 "$PREBUILT_DIR/linux_glibc_x86_64/$bin" "$HOME/.local/bin/$bin"
+        fi
+      done
+    else
+      echo "WARNING: Prebuilt directory missing: $PREBUILT_DIR/linux_glibc_x86_64"
+      echo "You can still use your python lpunpack.py fallback."
+    fi
+  fi
+else
+  echo "[*] lpunpack/lpmake already available."
+fi
+
+# -----------------------------------------------------------------------------#
+# pmbootstrap (postmarketOS build tool) + pmaports (ports tree reference)
+# -----------------------------------------------------------------------------#
+echo ""
+echo "==> Setting up pmbootstrap (postmarketOS build tool)..."
+if [[ ! -d "$PROJECT_DIR/pmbootstrap/.git" ]]; then
+  git clone https://gitlab.com/postmarketOS/pmbootstrap.git "$PROJECT_DIR/pmbootstrap"
+else
+  ( cd "$PROJECT_DIR/pmbootstrap" && git pull )
+fi
+python3 -m pip install --user --upgrade "$PROJECT_DIR/pmbootstrap"
+
+echo ""
+echo "==> Setting up pmaports (postmarketOS ports tree reference)..."
+if [[ ! -d "$PROJECT_DIR/pmaports/.git" ]]; then
+  git clone --depth=1 https://gitlab.com/postmarketOS/pmaports.git "$PROJECT_DIR/pmaports"
+else
+  ( cd "$PROJECT_DIR/pmaports" && git pull )
+fi
+
+echo ""
+echo "[7/7] Verification"
+echo -n "ADB (Android Debug Bridge — USB device communication) version: "
+adb --version 2>&1 | head -n1 || true
+
+echo -n "Fastboot (Android Fastboot — bootloader flashing mode) version: "
+fastboot --version 2>&1 | head -n1 || true
+
+echo -n "DTC (Device Tree Compiler — DTB/DTS tool) version: "
+dtc --version 2>&1 | head -n1 || true
+
+echo -n "simg2img (Android sparse image converter) path: "
+command -v simg2img || true
+
+echo -n "lpunpack (Logical Partitions unpack tool) path: "
+command -v lpunpack || echo "(missing; python fallback still possible)"
+
+echo -n "lpmake (Logical Partitions image builder) path: "
+command -v lpmake || echo "(missing; not fatal for extraction)"
+
+echo -n "pmbootstrap (postmarketOS build tool) version: "
+pmbootstrap --version 2>/dev/null || echo "(pmbootstrap installed; restart shell if needed)"
+
+echo ""
+echo "=== Setup complete ==="
+echo "Next recommended interactive shell:"
+echo "  distrobox enter teclast-dev -- bash -l"
+
+
+################################################################################
+### FILE: scripts/01_extract_firmware.sh
+################################################################################
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Extract Teclast P20HD official firmware:
+# - .rar (Roshal archive) -> Firmware.pac (Spreadtrum/UNISOC container)
+# - .pac -> boot.img + dtbo.img + vbmeta*.img (+ recovery.img etc.)
+#
+# Usage:
+#   bash scripts/extract_firmware.sh "/path/to/P20HD(...).rar"
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
+if [[ $# -ne 1 ]]; then
+  echo "Usage: $0 /path/to/firmware.rar"
+  exit 1
+fi
+
+FIRMWARE_RAR="$1"
+FW_DIR="$PROJECT_DIR/firmware"
+PACEX="$PROJECT_DIR/tools/pacextractor/pacextractor"
+
+mkdir -p "$FW_DIR" "$PROJECT_DIR/backup" "$PROJECT_DIR/extracted"
+
+if [[ ! -f "$FIRMWARE_RAR" ]]; then
+  echo "ERROR: Firmware RAR not found: $FIRMWARE_RAR"
+  exit 1
+fi
+
+if [[ ! -x "$PACEX" ]]; then
+  echo "ERROR: pacextractor not built/found: $PACEX"
+  echo "Run: bash scripts/devtools.sh"
+  exit 1
+fi
+
+cd "$FW_DIR"
+
+echo "==> Copying firmware archive into firmware/..."
+RAR_BASENAME="$(basename "$FIRMWARE_RAR")"
+cp -f "$FIRMWARE_RAR" "$RAR_BASENAME"
+
+EXTRACT_DIR="$FW_DIR/extracted_rar"
+OUT_DIR="$FW_DIR/extracted_pac"
+
+echo "==> Extracting RAR (Roshal archive) with unrar..."
+rm -rf "$EXTRACT_DIR"
+mkdir -p "$EXTRACT_DIR"
+unrar x -o+ "$RAR_BASENAME" "$EXTRACT_DIR/" > /dev/null
+
+echo "==> Locating PAC (Spreadtrum/UNISOC firmware container)..."
+PAC_FILE="$(find "$EXTRACT_DIR" -type f -iname '*.pac' | head -n 1 || true)"
+if [[ -z "$PAC_FILE" ]]; then
+  echo "ERROR: No .pac found inside extracted RAR."
+  exit 2
+fi
+echo "PAC: $PAC_FILE"
+
+echo "==> Extracting PAC with pacextractor..."
+rm -rf "$OUT_DIR"
+mkdir -p "$OUT_DIR"
+
+pushd "$OUT_DIR" > /dev/null
+"$PACEX" "$PAC_FILE" .
+popd > /dev/null
+
+echo "==> Copying boot-critical images into backup/..."
+cp -f "$OUT_DIR/boot.img" "$PROJECT_DIR/backup/boot-stock.img"
+cp -f "$OUT_DIR/dtbo.img" "$PROJECT_DIR/backup/" 2>/dev/null || true
+
+shopt -s nullglob
+vbmetas=( "$OUT_DIR"/vbmeta*.img "$OUT_DIR"/vbmeta-*.img )
+if [[ ${#vbmetas[@]} -gt 0 ]]; then
+  cp -f "${vbmetas[@]}" "$PROJECT_DIR/backup/"
+fi
+shopt -u nullglob
+
+echo "==> Result backup/:"
+ls -lh "$PROJECT_DIR/backup" | head -n 80
+file "$PROJECT_DIR/backup/boot-stock.img"
+
+
+################################################################################
+### FILE: scripts/02_unpack_and_extract_dtb.sh
+################################################################################
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+# Unpack boot image using AIK (Android Image Kitchen — boot image unpack/repack toolkit)
+# Then extract DTB (Device Tree Blob — hardware description) from boot image
+#
+# Usage:
+#   bash scripts/unpack_and_extract_dtb.sh
+#   bash scripts/unpack_and_extract_dtb.sh /path/to/boot.img
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+
+AIK_DIR="$PROJECT_DIR/AIK"
+BOOT_IMG="${1:-$PROJECT_DIR/backup/boot-stock.img}"
+
+OUT_DTB="$PROJECT_DIR/extracted/dtb_from_bootimg"
+mkdir -p "$OUT_DTB"
+
+if [[ ! -f "$BOOT_IMG" ]]; then
+  echo "ERROR: Missing boot image: $BOOT_IMG"
+  exit 1
+fi
+
+if [[ ! -d "$AIK_DIR" ]]; then
+  echo "ERROR: AIK directory missing: $AIK_DIR"
+  echo "Run: bash scripts/devtools.sh"
+  exit 1
+fi
+
+echo "==> Boot image: $BOOT_IMG"
+echo "==> AIK dir:    $AIK_DIR"
+
+echo "==> Unpacking boot image with AIK..."
+(
+  cd "$AIK_DIR"
+  # allow AIK to succeed even if it prints harmless warnings
+  bash ./unpackimg_x64.sh "$BOOT_IMG" || true
+)
+
+echo "==> Listing AIK artifacts..."
+ls -lah "$AIK_DIR/split_img" | head -n 80 || true
+ls -lah "$AIK_DIR/ramdisk"   | head -n 80 || true
+
+echo "==> Extracting DTB (Device Tree Blob) from FULL boot image (this matches your device)..."
+extract-dtb "$BOOT_IMG" -o "$OUT_DTB" || true
+
+if ! compgen -G "$OUT_DTB/*.dtb" >/dev/null; then
+  echo "ERROR: No DTB files found in $OUT_DTB"
+  echo "This device usually has DTB appended to boot image; verify extract-dtb is installed."
+  exit 2
+fi
+
+echo "==> Decompiling DTB -> DTS (Device Tree Source)..."
+cd "$OUT_DTB"
+for dtb in *.dtb; do
+  dtc -I dtb -O dts -o "${dtb%.dtb}.dts" "$dtb" || true
+done
+
+echo "==> Done. DTB/DTS output:"
+ls -lh "$OUT_DTB" | head -n 80
+
+
+################################################################################
+### FILE: scripts/03_unpack_super_img.sh
+################################################################################
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+SUPER_IMG="${1:-$PROJECT_DIR/firmware/super.img}"
+OUTDIR="${2:-$PROJECT_DIR/extracted/super_lpunpack}"
+
+mkdir -p "$OUTDIR"
+mkdir -p "$PROJECT_DIR/extracted"
+
+# If default path isn't correct, try to find it automatically.
+if [[ ! -f "$SUPER_IMG" ]]; then
+  FOUND="$(find "$PROJECT_DIR/firmware" -maxdepth 4 -type f -name "super.img" 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$FOUND" ]]; then
+    SUPER_IMG="$FOUND"
+  fi
+fi
+
+if [[ ! -f "$SUPER_IMG" ]]; then
+  echo "ERROR: super.img not found."
+  echo "Tried: $SUPER_IMG"
+  echo "Hint: find $PROJECT_DIR/firmware -maxdepth 4 -name super.img"
+  exit 1
+fi
+
+echo "[*] super.img: $SUPER_IMG"
+file "$SUPER_IMG" || true
+
+# Tool selection
+LPUNPACK_BIN="$(command -v lpunpack 2>/dev/null || true)"
+LPUNPACK_PY="$PROJECT_DIR/tools/lpunpack/lpunpack.py"
+
+if [[ -z "$LPUNPACK_BIN" && ! -f "$LPUNPACK_PY" ]]; then
+  echo "ERROR: Neither 'lpunpack' nor '$LPUNPACK_PY' exists."
+  echo ""
+  echo "Fix (recommended):"
+  echo "  mkdir -p $PROJECT_DIR/tools/lpunpack"
+  echo "  # put your lpunpack.py there as: tools/lpunpack/lpunpack.py"
+  exit 2
+fi
+
+# Convert sparse -> raw if needed
+RAW_IMG="$PROJECT_DIR/extracted/super.raw.img"
+if file "$SUPER_IMG" | grep -qi "sparse"; then
+  if ! command -v simg2img >/dev/null 2>&1; then
+    echo "ERROR: simg2img not found (Android sparse converter)."
+    echo "Install: sudo apt install -y android-sdk-libsparse-utils"
+    exit 3
+  fi
+
+  if [[ ! -f "$RAW_IMG" || ! -s "$RAW_IMG" ]]; then
+    echo "[*] Sparse super.img detected -> converting to raw: $RAW_IMG"
+    simg2img "$SUPER_IMG" "$RAW_IMG"
+  else
+    echo "[*] Raw super image already exists: $RAW_IMG"
+  fi
+
+  SUPER_IMG="$RAW_IMG"
+fi
+
+echo "[*] Unpacking super.img -> $OUTDIR"
+rm -f "$OUTDIR"/*.img 2>/dev/null || true
+
+if [[ -n "$LPUNPACK_BIN" ]]; then
+  echo "[*] Using binary lpunpack: $LPUNPACK_BIN"
+  "$LPUNPACK_BIN" -v "$SUPER_IMG" "$OUTDIR"
+else
+  echo "[*] Using python lpunpack: $LPUNPACK_PY"
+  python3 "$LPUNPACK_PY" "$SUPER_IMG" "$OUTDIR"
+fi
+
+echo
+echo "[*] Done. Extracted logical partitions:"
+ls -lh "$OUTDIR" | head -n 120
+
+
+################################################################################
+### FILE: scripts/04_extract_vendor_blobs.sh
+################################################################################
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+SUPER_DIR="${1:-$PROJECT_DIR/extracted/super_lpunpack}"
+OUTDIR="${2:-$PROJECT_DIR/extracted/vendor_blobs}"
+
+mkdir -p "$OUTDIR"
+mkdir -p "$PROJECT_DIR/work"
+
+VENDOR_IMG="$(find "$SUPER_DIR" -maxdepth 1 -type f -name "vendor*.img" | head -n 1 || true)"
+if [[ -z "$VENDOR_IMG" || ! -f "$VENDOR_IMG" ]]; then
+  echo "ERROR: vendor*.img not found in: $SUPER_DIR"
+  echo "Hint: run scripts/03_unpack_super_img.sh first."
+  exit 1
+fi
+
+echo "[*] vendor image: $VENDOR_IMG"
+file "$VENDOR_IMG" || true
+
+# Convert sparse vendor.img -> raw if needed
+VENDOR_RAW="$PROJECT_DIR/extracted/vendor.raw.img"
+if file "$VENDOR_IMG" | grep -qi "sparse"; then
+  if ! command -v simg2img >/dev/null 2>&1; then
+    echo "ERROR: simg2img not found."
+    echo "Install: sudo apt install -y android-sdk-libsparse-utils"
+    exit 2
+  fi
+  if [[ ! -f "$VENDOR_RAW" || ! -s "$VENDOR_RAW" ]]; then
+    echo "[*] Sparse vendor image detected -> converting: $VENDOR_RAW"
+    simg2img "$VENDOR_IMG" "$VENDOR_RAW"
+  fi
+else
+  VENDOR_RAW="$VENDOR_IMG"
+fi
+
+MNT="$PROJECT_DIR/work/mnt_vendor"
+mkdir -p "$MNT"
+
+copy_if_exists() {
+  local src="$1"
+  local dst="$2"
+  if [[ -e "$src" ]]; then
+    mkdir -p "$(dirname "$dst")"
+    cp -a "$src" "$dst"
+  fi
+}
+
+echo "[*] Trying mount extraction (preferred)..."
+if sudo mount -o loop,ro "$VENDOR_RAW" "$MNT" 2>/dev/null; then
+  echo "[*] Mounted vendor -> $MNT"
+
+  mkdir -p "$OUTDIR/lib" "$OUTDIR/etc/vintf" "$OUTDIR/firmware"
+
+  if [[ -d "$MNT/lib/modules" ]]; then
+    mkdir -p "$OUTDIR/lib"
+    cp -a "$MNT/lib/modules" "$OUTDIR/lib/" || true
+  fi
+
+  if [[ -d "$MNT/firmware" ]]; then
+    cp -a "$MNT/firmware" "$OUTDIR/" || true
+  fi
+
+  copy_if_exists "$MNT/etc/vintf/manifest.xml" "$OUTDIR/etc/vintf/manifest.xml"
+  copy_if_exists "$MNT/etc/vintf/compatibility_matrix.xml" "$OUTDIR/etc/vintf/compatibility_matrix.xml"
+  copy_if_exists "$MNT/build.prop" "$OUTDIR/build.prop"
+
+  sudo umount "$MNT"
+  echo "[*] Unmounted."
+else
+  echo "[!] Mount failed (container or permissions). Falling back to debugfs..."
+  if ! command -v debugfs >/dev/null 2>&1; then
+    echo "ERROR: debugfs not found."
+    echo "Install: sudo apt install -y e2fsprogs"
+    exit 3
+  fi
+
+  mkdir -p "$OUTDIR/lib/modules" "$OUTDIR/firmware" "$OUTDIR/etc/vintf"
+
+  # Directories
+  debugfs -R "rdump /lib/modules $OUTDIR/lib/modules" "$VENDOR_RAW" >/dev/null 2>&1 || true
+  debugfs -R "rdump /firmware $OUTDIR/firmware" "$VENDOR_RAW" >/dev/null 2>&1 || true
+
+  # Files
+  debugfs -R "dump /etc/vintf/manifest.xml $OUTDIR/etc/vintf/manifest.xml" "$VENDOR_RAW" >/dev/null 2>&1 || true
+  debugfs -R "dump /etc/vintf/compatibility_matrix.xml $OUTDIR/etc/vintf/compatibility_matrix.xml" "$VENDOR_RAW" >/dev/null 2>&1 || true
+  debugfs -R "dump /build.prop $OUTDIR/build.prop" "$VENDOR_RAW" >/dev/null 2>&1 || true
+fi
+
+echo
+echo "[*] Done. Extracted vendor bringup blobs:"
+find "$OUTDIR" -maxdepth 4 -type f | sed 's|^'"$PROJECT_DIR/"'||' | head -n 120
+
+
+################################################################################
+### FILE: scripts/05_collect_device_info.sh
+################################################################################
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+OUTDIR="$PROJECT_DIR/device-info"
+mkdir -p "$OUTDIR"
+
+echo "[*] Writing device info into: $OUTDIR"
+
+# Boot image cmdline (offline)
+CMDLINE_FILE="$PROJECT_DIR/AIK/split_img/boot-stock.img-cmdline"
+if [[ -f "$CMDLINE_FILE" ]]; then
+  cat "$CMDLINE_FILE" | tee "$OUTDIR/bootimg_cmdline.txt"
+else
+  echo "[!] Missing $CMDLINE_FILE (run scripts/02_unpack_and_extract_dtb.sh first?)" | tee "$OUTDIR/bootimg_cmdline.txt"
+fi
+
+# ADB online info (optional)
+if ! command -v adb >/dev/null 2>&1; then
+  echo "[!] adb not found, skipping runtime collection."
+  exit 0
+fi
+
+echo "[*] adb devices:"
+adb devices -l | tee "$OUTDIR/adb_devices.txt" || true
+
+STATE="$(adb get-state 2>/dev/null || true)"
+if [[ "$STATE" != "device" ]]; then
+  echo "[!] No connected device in 'device' state. Skipping adb pulls."
+  exit 0
+fi
+
+echo "[*] Collecting getprop..."
+adb shell getprop | tee "$OUTDIR/getprop_full.txt" >/dev/null || true
+
+echo "[*] Collecting boot/product props subset..."
+adb shell getprop \
+  | grep -E '\[(ro\.boot|ro\.hardware|ro\.product|androidboot)\.' \
+  | tee "$OUTDIR/getprop_boot_product_subset.txt" >/dev/null || true
+
+echo "[*] Collecting uname/proc version..."
+adb shell uname -a | tee "$OUTDIR/uname_a.txt" >/dev/null || true
+adb shell cat /proc/version | tee "$OUTDIR/proc_version.txt" >/dev/null || true
+
+echo "[*] Attempting /proc/cmdline (may be blocked on locked user builds)..."
+adb shell cat /proc/cmdline | tee "$OUTDIR/proc_cmdline.txt" >/dev/null || true
+
+echo
+echo "[*] Done."
+
+
+################################################################################
+### FILE: scripts/06_extract_kernel_info.sh
+################################################################################
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+OUTDIR="$PROJECT_DIR/extracted/kernel_info"
+mkdir -p "$OUTDIR"
+
+AIK_SPLIT="$PROJECT_DIR/AIK/split_img"
+if [[ ! -d "$AIK_SPLIT" ]]; then
+  echo "ERROR: AIK split_img missing: $AIK_SPLIT"
+  echo "Run scripts/02_unpack_and_extract_dtb.sh first."
+  exit 1
+fi
+
+KERNEL_FILE="$(ls "$AIK_SPLIT"/*zImage* "$AIK_SPLIT"/*kernel* 2>/dev/null | head -n 1 || true)"
+if [[ -z "$KERNEL_FILE" ]]; then
+  echo "ERROR: Could not find kernel file in $AIK_SPLIT"
+  exit 2
+fi
+
+echo "[*] Kernel file: $KERNEL_FILE"
+file "$KERNEL_FILE" | tee "$OUTDIR/kernel_filetype.txt" >/dev/null || true
+
+if ! command -v strings >/dev/null 2>&1; then
+  echo "ERROR: strings not found."
+  echo "Install: sudo apt install -y binutils"
+  exit 3
+fi
+
+echo "[*] Extracting Linux version string..."
+strings -a "$KERNEL_FILE" | grep -m 1 -E '^Linux version ' | tee "$OUTDIR/linux_version.txt" >/dev/null || true
+
+echo "[*] Extracting androidboot strings..."
+strings -a "$KERNEL_FILE" | grep -i 'androidboot' | head -n 200 > "$OUTDIR/androidboot_strings.txt" || true
+
+echo "[*] Checking for appended DTB blobs..."
+if command -v extract-dtb >/dev/null 2>&1; then
+  DTB_DIR="$OUTDIR/dtb_from_kernel"
+  mkdir -p "$DTB_DIR"
+  extract-dtb "$KERNEL_FILE" -o "$DTB_DIR" >/dev/null 2>&1 || true
+  COUNT="$(find "$DTB_DIR" -maxdepth 1 -type f -name '*.dtb' | wc -l | tr -d ' ')"
+  echo "$COUNT" | tee "$OUTDIR/appended_dtb_count.txt" >/dev/null
+else
+  echo "[!] extract-dtb not installed; skipping DTB scan." | tee "$OUTDIR/appended_dtb_count.txt"
+fi
+
+echo "[*] Done. Output in: $OUTDIR"
+ls -lh "$OUTDIR" | head -n 80
+
+
+################################################################################
+### FILE: scripts/07_extract_vbmeta_info.sh
+################################################################################
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+OUTDIR="$PROJECT_DIR/extracted/vbmeta_info"
+mkdir -p "$OUTDIR"
+
+VBMETA_DIR="$PROJECT_DIR/backup"
+if [[ ! -d "$VBMETA_DIR" ]]; then
+  echo "ERROR: missing $VBMETA_DIR"
+  exit 1
+fi
+
+ensure_avbtool() {
+  if command -v avbtool >/dev/null 2>&1; then
+    echo "avbtool"
+    return 0
+  fi
+
+  local TOOL_DIR="$PROJECT_DIR/tools/avb"
+  local TOOL="$TOOL_DIR/avbtool.py"
+  mkdir -p "$TOOL_DIR"
+
+  if [[ ! -f "$TOOL" ]]; then
+    echo "[*] avbtool not found -> downloading from AOSP..."
+    if ! command -v curl >/dev/null 2>&1; then
+      echo "ERROR: curl not found."
+      exit 2
+    fi
+    if ! command -v base64 >/dev/null 2>&1; then
+      echo "ERROR: base64 not found."
+      exit 3
+    fi
+
+    # AOSP "format=TEXT" returns base64-encoded content
+    curl -fsSL "https://android.googlesource.com/platform/external/avb/+/refs/heads/master/avbtool?format=TEXT" \
+      | base64 -d > "$TOOL"
+    chmod +x "$TOOL"
+  fi
+
+  echo "python3 $TOOL"
+}
+
+AVBTOOL_CMD="$(ensure_avbtool)"
+
+echo "[*] Using: $AVBTOOL_CMD"
+echo
+
+mapfile -t IMAGES < <(find "$VBMETA_DIR" -maxdepth 1 -type f -name "vbmeta*.img" -o -name "vbmeta-*.img" | sort)
+if [[ "${#IMAGES[@]}" -eq 0 ]]; then
+  echo "ERROR: No vbmeta images found in $VBMETA_DIR"
+  exit 4
+fi
+
+for img in "${IMAGES[@]}"; do
+  base="$(basename "$img")"
+  out="$OUTDIR/${base}.info.txt"
+  echo "[*] vbmeta -> $base"
+  # shellcheck disable=SC2086
+  $AVBTOOL_CMD info_image --image "$img" > "$out" 2>&1 || true
+done
+
+echo
+echo "[*] Summary (verified partitions):"
+grep -R "Partition Name:" -n "$OUTDIR" | head -n 120 || true
+
+echo
+echo "[*] Done. Outputs in: $OUTDIR"
+
+
+################################################################################
+### FILE: scripts/08_split_dtbo_overlays.sh
+################################################################################
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+DTBO_IMG="${1:-$PROJECT_DIR/backup/dtbo.img}"
+OUTDIR="${2:-$PROJECT_DIR/extracted/dtbo_split}"
+
+mkdir -p "$OUTDIR"
+
+# Auto-find dtbo.img if default missing
+if [[ ! -f "$DTBO_IMG" ]]; then
+  FOUND="$(find "$PROJECT_DIR" -maxdepth 4 -type f -name "dtbo.img" 2>/dev/null | head -n 1 || true)"
+  if [[ -n "$FOUND" ]]; then
+    DTBO_IMG="$FOUND"
+  fi
+fi
+
+if [[ ! -f "$DTBO_IMG" ]]; then
+  echo "ERROR: dtbo.img not found."
+  echo "Tried: $DTBO_IMG"
+  echo "Hint: find $PROJECT_DIR -maxdepth 4 -name dtbo.img"
+  exit 1
+fi
+
+if ! command -v dtc >/dev/null 2>&1; then
+  echo "ERROR: dtc not found (Device Tree Compiler)."
+  echo "Install: sudo apt install -y device-tree-compiler"
+  exit 2
+fi
+
+echo "[*] DTBO image: $DTBO_IMG"
+file "$DTBO_IMG" || true
+echo "[*] Output dir: $OUTDIR"
+
+python3 - <<'PY'
+import os, struct
+
+DT_TABLE_MAGIC = 0xD7B7AB1E
+
+def u32(data, off, endian):
+    return struct.unpack_from(endian + "I", data, off)[0]
+
+def detect_endian(data):
+    if u32(data, 0, ">") == DT_TABLE_MAGIC:
+        return ">"
+    if u32(data, 0, "<") == DT_TABLE_MAGIC:
+        return "<"
+    return None
+
+dtbo_path = os.environ["DTBO_IMG"]
+outdir = os.environ["OUTDIR"]
+
+with open(dtbo_path, "rb") as f:
+    data = f.read()
+
+endian = detect_endian(data)
+if endian is None:
+    raise SystemExit("ERROR: DTBO magic not found (not a DTBO image?)")
+
+header_size    = u32(data,  4, endian)
+entry_size     = u32(data, 12, endian)
+entry_count    = u32(data, 16, endian)
+entries_offset = u32(data, 20, endian)
+
+print(f"DTBO: endian={'big' if endian=='>' else 'little'} | header_size={header_size} | entries={entry_count} | entry_size={entry_size}")
+
+os.makedirs(outdir, exist_ok=True)
+
+# idempotent: clear old extracted overlays
+for fn in os.listdir(outdir):
+    if fn.endswith(".dtb") and fn.startswith("dtbo_"):
+        os.remove(os.path.join(outdir, fn))
+
+for i in range(entry_count):
+    eoff = entries_offset + i * entry_size
+    dt_size = u32(data, eoff + 0, endian)
+    dt_off  = u32(data, eoff + 4, endian)
+    dt_id   = u32(data, eoff + 8, endian)
+    dt_rev  = u32(data, eoff + 12, endian)
+
+    blob = data[dt_off:dt_off+dt_size]
+    out = os.path.join(outdir, f"dtbo_{i:03d}_id{dt_id:08x}_rev{dt_rev:08x}.dtb")
+    with open(out, "wb") as f:
+        f.write(blob)
+
+print(f"Extracted overlays into {outdir}")
+PY
+export DTBO_IMG="$DTBO_IMG"
+export OUTDIR="$OUTDIR"
+
+echo
+echo "[*] Decompiling DTBs -> DTS..."
+shopt -s nullglob
+for f in "$OUTDIR"/*.dtb; do
+  dts="${f%.dtb}.dts"
+  # idempotent: overwrite each time
+  dtc -I dtb -O dts -o "$dts" "$f" 2>"$dts.warnings.txt" || true
+done
+shopt -u nullglob
+
+echo
+echo "[*] Done. Extracted overlays:"
+ls -lh "$OUTDIR" | head -n 120
+
+
+################################################################################
+### FILE: scripts/09_extract_ramdisk_init.sh
+################################################################################
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+AIK_RAMDISK="${1:-$PROJECT_DIR/AIK/ramdisk}"
+OUTDIR="${2:-$PROJECT_DIR/extracted/ramdisk_init}"
+
+INITDIR="$OUTDIR/init"
+FSTABDIR="$OUTDIR/fstab"
+UEVENTDDIR="$OUTDIR/ueventd"
+
+mkdir -p "$INITDIR" "$FSTABDIR" "$UEVENTDDIR"
+
+if [[ ! -d "$AIK_RAMDISK" ]]; then
+  echo "ERROR: AIK ramdisk directory not found: $AIK_RAMDISK"
+  echo "Hint: run scripts/02_unpack_and_extract_dtb.sh first (AIK unpack step creates ramdisk/)."
+  exit 1
+fi
+
+echo "[*] AIK ramdisk: $AIK_RAMDISK"
+echo "[*] Output dir:  $OUTDIR"
+
+# Idempotent: clear previous copies only (not entire OUTDIR)
+rm -f "$INITDIR"/* "$FSTABDIR"/* "$UEVENTDDIR"/* 2>/dev/null || true
+
+shopt -s nullglob
+
+# Copy init*.rc
+for f in "$AIK_RAMDISK"/init*.rc; do
+  cp -a "$f" "$INITDIR/"
+done
+
+# Copy fstab.*
+for f in "$AIK_RAMDISK"/fstab*; do
+  cp -a "$f" "$FSTABDIR/"
+done
+
+# Copy ueventd*.rc
+for f in "$AIK_RAMDISK"/ueventd*.rc; do
+  cp -a "$f" "$UEVENTDDIR/"
+done
+
+shopt -u nullglob
+
+# Create index report
+INDEX="$OUTDIR/ramdisk_index.txt"
+{
+  echo "=== ramdisk init extraction index ==="
+  echo "Source: $AIK_RAMDISK"
+  echo "Output: $OUTDIR"
+  echo
+  echo "--- init scripts (init*.rc) ---"
+  ls -1 "$INITDIR" 2>/dev/null || true
+  echo
+  echo "--- fstab files (fstab*) ---"
+  ls -1 "$FSTABDIR" 2>/dev/null || true
+  echo
+  echo "--- ueventd rules (ueventd*.rc) ---"
+  ls -1 "$UEVENTDDIR" 2>/dev/null || true
+  echo
+  echo "--- line counts ---"
+  for f in "$INITDIR"/* "$FSTABDIR"/* "$UEVENTDDIR"/*; do
+    [[ -f "$f" ]] || continue
+    printf "%7s  %s\n" "$(wc -l < "$f")" "$(basename "$f")"
+  done
+  echo
+  echo "--- quick grep hints ---"
+  echo "  grep -R \"on init\" -n $INITDIR"
+  echo "  grep -R \"service \" -n $INITDIR"
+  echo "  grep -R \"mount_all\" -n $INITDIR"
+  echo "  grep -R \"first_stage_mount\" -n $FSTABDIR"
+  echo "  grep -R \"firmware\" -n $INITDIR $UEVENTDDIR"
+  echo "  grep -R \"chmod\" -n $UEVENTDDIR"
+} > "$INDEX"
+
+echo
+echo "[*] Done. Index written:"
+echo "    $INDEX"
+echo
+echo "[*] Output tree:"
+find "$OUTDIR" -maxdepth 2 -type f | sed 's|^'"$PROJECT_DIR/"'||' | head -n 160
+
+
+################################################################################
+### FILE: scripts/10_bringup_report.sh
+################################################################################
+
+#!/usr/bin/env bash
+set -euo pipefail
+
+# -----------------------------------------------------------------------------
+# 10_bringup_report.sh
+#
+# Generate a single Markdown bringup report for postmarketOS porting work.
+# Idempotent: overwrites the report every run.
+#
+# Output:
+#   reports/bringup_report.md
+#
+# Inputs (if present):
+#   device-info/*
+#   backup/*
+#   extracted/dtb_from_bootimg/*
+#   extracted/dtbo_split/*
+#   extracted/ramdisk_init/*
+#   extracted/super_lpunpack/*
+#   extracted/vendor_blobs/*
+# -----------------------------------------------------------------------------
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+
+REPORT_DIR="${PROJECT_DIR}/reports"
+REPORT_MD="${REPORT_DIR}/bringup_report.md"
+
+mkdir -p "$REPORT_DIR"
+
+# -----------------------------------------------------------------------------
+# Helpers
+# -----------------------------------------------------------------------------
+hr() { echo ""; echo "---"; echo ""; }
+
+h1() { echo "# $*"; echo ""; }
+h2() { echo "## $*"; echo ""; }
+h3() { echo "### $*"; echo ""; }
+
+codeblock() {
+  local lang="${1:-}"
+  echo ""
+  echo "```$lang"
+  cat
+  echo "```"
+  echo ""
+}
+
+safe_cmd() {
+  # Run a command, never fail the script.
+  # Prints the command and output as a code block.
+  local title="$1"; shift
+  h3 "$title"
+  {
+    echo "\$ $*"
+    "$@" 2>&1 || true
+  } | codeblock ""
+}
+
+safe_cat() {
+  local title="$1"
+  local file="$2"
+  h3 "$title"
+  if [[ -f "$file" ]]; then
+    sed -n '1,200p' "$file" | codeblock ""
+  else
+    echo "_Missing:_ \`$file\`"
+    echo ""
+  fi
+}
+
+safe_ls() {
+  local title="$1"
+  local path="$2"
+  local maxlines="${3:-120}"
+  h3 "$title"
+  if [[ -e "$path" ]]; then
+    (ls -lah "$path" 2>&1 | head -n "$maxlines") | codeblock ""
+  else
+    echo "_Missing:_ \`$path\`"
+    echo ""
+  fi
+}
+
+sha256_list() {
+  local title="$1"; shift
+  h3 "$title"
+  local any=0
+  for f in "$@"; do
+    if [[ -f "$f" ]]; then
+      any=1
+      echo "$(sha256sum "$f")"
+    fi
+  done
+  if [[ "$any" -eq 0 ]]; then
+    echo "_No files found._"
+  fi
+  echo "" | codeblock ""
+}
+
+grep_some() {
+  local title="$1"
+  local file="$2"
+  local pattern="$3"
+  local maxlines="${4:-80}"
+  h3 "$title"
+  if [[ -f "$file" ]]; then
+    (grep -nE "$pattern" "$file" 2>/dev/null | head -n "$maxlines") | codeblock ""
+  else
+    echo "_Missing:_ \`$file\`"
+    echo ""
+  fi
+}
+
+find_some() {
+  local title="$1"
+  local base="$2"
+  local expr="$3"
+  local maxlines="${4:-120}"
+  h3 "$title"
+  if [[ -d "$base" ]]; then
+    # shellcheck disable=SC2016
+    (bash -lc "cd \"$base\" && eval \"$expr\" 2>/dev/null | head -n $maxlines") | codeblock ""
+  else
+    echo "_Missing directory:_ \`$base\`"
+    echo ""
+  fi
+}
+
+# -----------------------------------------------------------------------------
+# Paths we care about
+# -----------------------------------------------------------------------------
+BOOT_CMDLINE_TXT="${PROJECT_DIR}/device-info/bootimg_cmdline.txt"
+GETPROP_FULL_TXT="${PROJECT_DIR}/device-info/getprop_full.txt"
+PROC_CMDLINE_TXT="${PROJECT_DIR}/device-info/proc_cmdline.txt"
+
+AIK_CMDLINE="${PROJECT_DIR}/AIK/split_img/boot-stock.img-cmdline"
+
+DTB_TRIMMED="${PROJECT_DIR}/backup/dtb-stock-trimmed.dtb"
+DTB_TRIMMED_DTS="${PROJECT_DIR}/backup/dtb-stock-trimmed.dts"
+DTB_DIR="${PROJECT_DIR}/extracted/dtb_from_bootimg"
+DTBO_DIR="${PROJECT_DIR}/extracted/dtbo_split"
+
+RAMDISK_DIR="${PROJECT_DIR}/extracted/ramdisk_init"
+SUPER_IMG="${PROJECT_DIR}/firmware/super.img"
+SUPER_LP_DIR="${PROJECT_DIR}/extracted/super_lpunpack"
+
+VENDOR_BLOBS_DIR="${PROJECT_DIR}/extracted/vendor_blobs"
+BACKUP_DIR="${PROJECT_DIR}/backup"
+
+# -----------------------------------------------------------------------------
+# Generate report
+# -----------------------------------------------------------------------------
+{
+  h1 "Bringup Report (Teclast P20HD / Unisoc SC9863A)"
+
+  echo "**Generated:** $(date -Is)"
+  echo ""
+  echo "**Project root:** \`$PROJECT_DIR\`"
+  echo ""
+
+  hr
+
+  h2 "Host Environment"
+  safe_cmd "Host uname" uname -a
+
+  # Best-effort distro info
+  if [[ -f /etc/os-release ]]; then
+    safe_cat "Host /etc/os-release" /etc/os-release
+  fi
+
+  hr
+
+  h2 "Tooling Versions (sanity)"
+  safe_cmd "adb (Android Debug Bridge — device communication tool)" adb --version
+  safe_cmd "fastboot (Android Fastboot — bootloader flashing tool)" fastboot --version
+  safe_cmd "dtc (Device Tree Compiler — DTB/DTS compiler/decompiler)" dtc --version
+  safe_cmd "python3 (Python — scripting runtime)" python3 --version
+  safe_cmd "simg2img (Sparse image converter — converts Android sparse images to raw)" simg2img --help
+
+  hr
+
+  h2 "Device Identity (from getprop if available)"
+
+  # If we don't have saved getprop, try to pull it live
+  if [[ ! -f "$GETPROP_FULL_TXT" ]]; then
+    echo "_Saved getprop dump missing; attempting live ADB pull..._"
+    echo ""
+    mkdir -p "${PROJECT_DIR}/device-info"
+    adb shell getprop > "$GETPROP_FULL_TXT" 2>/dev/null || true
+  fi
+
+  if [[ -f "$GETPROP_FULL_TXT" ]]; then
+    grep_some "Key properties (ro.boot / ro.product / ro.hardware)" "$GETPROP_FULL_TXT" '\[(ro\.boot|ro\.hardware|ro\.product)\.' 120
+    grep_some "Build fingerprint + SDK + release" "$GETPROP_FULL_TXT" '\[(ro\.product\.build\.fingerprint|ro\.product\.build\.version\.sdk|ro\.product\.build\.version\.release|ro\.boot\.verifiedbootstate|ro\.boot\.flash\.locked)\]' 120
+  else
+    echo "_No getprop data available yet._"
+    echo ""
+  fi
+
+  hr
+
+  h2 "Kernel Command Line (bootargs)"
+
+  # Prefer saved commandline, else AIK split artifact
+  if [[ -f "$BOOT_CMDLINE_TXT" ]]; then
+    safe_cat "Saved boot cmdline (device-info/bootimg_cmdline.txt)" "$BOOT_CMDLINE_TXT"
+  elif [[ -f "$AIK_CMDLINE" ]]; then
+    safe_cat "AIK boot img cmdline (AIK/split_img/*-cmdline)" "$AIK_CMDLINE"
+  else
+    echo "_Missing boot cmdline output._"
+    echo ""
+  fi
+
+  # If someone managed to pull /proc/cmdline (rare on locked user builds)
+  if [[ -f "$PROC_CMDLINE_TXT" ]]; then
+    safe_cat "Saved /proc/cmdline (device-info/proc_cmdline.txt)" "$PROC_CMDLINE_TXT"
+  else
+    echo "_/proc/cmdline was not readable over ADB (expected on locked user builds)._"
+    echo ""
+  fi
+
+  hr
+
+  h2 "Device Tree (DTB — Device Tree Blob, hardware description)"
+
+  # If trimmed DTS doesn't exist but trimmed DTB does, attempt to decompile it.
+  if [[ -f "$DTB_TRIMMED" && ! -f "$DTB_TRIMMED_DTS" ]]; then
+    dtc -I dtb -O dts -o "$DTB_TRIMMED_DTS" "$DTB_TRIMMED" 2>/dev/null || true
+  fi
+
+  if [[ -f "$DTB_TRIMMED_DTS" ]]; then
+    grep_some "DTB model / compatible" "$DTB_TRIMMED_DTS" 'model =|compatible =' 40
+    grep_some "Touchscreen hints" "$DTB_TRIMMED_DTS" 'gslx680|touch|touchscreen' 80
+    grep_some "Display/Panel/DSI (Display Serial Interface — mobile display bus)" "$DTB_TRIMMED_DTS" 'dsi|panel|lcd|display|backlight' 120
+    grep_some "WiFi/BT (Bluetooth — short-range radio) / WCN (Wireless Connectivity Node)" "$DTB_TRIMMED_DTS" 'wcn|bt|wifi|sprdwl|sc2355' 120
+  else
+    echo "_Trimmed DTB DTS not found. Checking extracted DTB directory..._"
+    echo ""
+    safe_ls "Extracted DTB directory" "$DTB_DIR"
+    find_some "DTB/DTS candidates under extracted/dtb_from_bootimg" "$DTB_DIR" 'ls -1 *.dtb *.dts 2>/dev/null' 120
+  fi
+
+  hr
+
+  h2 "DTBO Overlays (DTBO — Device Tree Blob Overlays, board-specific patches)"
+
+  safe_ls "Extracted overlays directory" "$DTBO_DIR"
+
+  if [[ -d "$DTBO_DIR" ]]; then
+    echo "#### Overlay compatibles (quick scan)"
+    echo ""
+    for dts in "$DTBO_DIR"/*.dts; do
+      [[ -f "$dts" ]] || continue
+      echo "- **$(basename "$dts")**"
+      grep -nE 'compatible = ' "$dts" | head -n 20 | sed 's/^/  /'
+      echo ""
+    done | codeblock ""
+  else
+    echo "_No extracted overlays found. Run:_"
+    echo ""
+    echo "\`bash scripts/08_split_dtbo_overlays.sh\`"
+    echo ""
+  fi
+
+  hr
+
+  h2 "Ramdisk init artifacts (init — Android init config, fstab — mount rules)"
+
+  safe_ls "Ramdisk init extraction root" "$RAMDISK_DIR"
+
+  if [[ -d "$RAMDISK_DIR" ]]; then
+    safe_ls "init scripts" "${RAMDISK_DIR}/init"
+    safe_ls "fstab files" "${RAMDISK_DIR}/fstab"
+    safe_ls "ueventd rules" "${RAMDISK_DIR}/ueventd"
+
+    # Grep a few high-signal keywords
+    find_some "init: services summary (service …)" "${RAMDISK_DIR}/init" 'grep -R "^[[:space:]]*service " -n . | head -n 80' 80
+    find_some "init: mount_all usage" "${RAMDISK_DIR}/init" 'grep -R "mount_all" -n . | head -n 80' 80
+    find_some "fstab: first_stage_mount flags" "${RAMDISK_DIR}/fstab" 'grep -R "first_stage_mount" -n . | head -n 80' 80
+  else
+    echo "_No ramdisk init extraction found. Run:_"
+    echo ""
+    echo "\`bash scripts/09_extract_ramdisk_init.sh\`"
+    echo ""
+  fi
+
+  hr
+
+  h2 "Dynamic Partitions (super.img — contains system/vendor/product as logical partitions)"
+
+  if [[ -f "$SUPER_IMG" ]]; then
+    safe_cmd "super.img file type" file "$SUPER_IMG"
+    safe_ls "super.img size" "$SUPER_IMG"
+  else
+    echo "_Missing super.img at:_ \`$SUPER_IMG\`"
+    echo ""
+  fi
+
+  if [[ -d "$SUPER_LP_DIR" ]]; then
+    safe_ls "Extracted logical partitions (lpunpack output)" "$SUPER_LP_DIR"
+    find_some "List extracted *.img partitions" "$SUPER_LP_DIR" 'ls -lh *.img 2>/dev/null' 120
+  else
+    echo "_No extracted super partitions directory found: \`$SUPER_LP_DIR\`_"
+    echo ""
+    echo "If your unpack script failed due to missing **lpunpack**, install a working extractor (binary or python), then rerun:"
+    echo ""
+    echo "\`bash scripts/unpack_super_img.sh\`"
+    echo ""
+  fi
+
+  hr
+
+  h2 "Vendor blobs (vendor — hardware userspace drivers/firmware)"
+
+  if [[ -d "$VENDOR_BLOBS_DIR" ]]; then
+    safe_ls "Vendor blobs root" "$VENDOR_BLOBS_DIR"
+    safe_ls "vendor/firmware" "${VENDOR_BLOBS_DIR}/vendor_firmware"
+    safe_ls "vendor/lib/modules" "${VENDOR_BLOBS_DIR}/vendor_modules"
+    safe_ls "vendor/etc/vintf" "${VENDOR_BLOBS_DIR}/vendor_vintf"
+    safe_ls "vendor/build.prop" "${VENDOR_BLOBS_DIR}/vendor_build_prop"
+  else
+    echo "_Vendor blobs not extracted yet (optional but recommended)._"
+    echo ""
+    echo "When you add it, run:"
+    echo ""
+    echo "\`bash scripts/extract_vendor_blobs.sh\`"
+    echo ""
+  fi
+
+  hr
+
+  h2 "AVB / vbmeta inventory (AVB — Android Verified Boot, verification metadata)"
+
+  VB_FILES=()
+  while IFS= read -r -d '' f; do VB_FILES+=("$f"); done < <(find "$BACKUP_DIR" -maxdepth 1 -type f -name "vbmeta*.img" -print0 2>/dev/null || true)
+
+  if [[ "${#VB_FILES[@]}" -gt 0 ]]; then
+    safe_ls "vbmeta images in backup/" "$BACKUP_DIR"
+    sha256_list "vbmeta checksums" "${VB_FILES[@]}"
+  else
+    echo "_No vbmeta*.img found in backup/._"
+    echo ""
+  fi
+
+  hr
+
+  h2 "High-signal bringup conclusions"
+
+  echo "- **SoC (System on Chip — CPU/GPU/IO package):** Unisoc/Spreadtrum **SC9863A**"
+  echo "- **Board string:** \`s9863a1h10\` (from ro.boot.hardware)"
+  echo "- **Android version:** Android 10 (SDK 29) (from ro.product.build.version.*)"
+  echo "- **Dynamic partitions:** enabled (super.img present + ro.boot.dynamic_partitions=true)"
+  echo "- **Bootloader locked:** ro.boot.flash.locked=1 (expect restrictions)"
+  echo "- **DTB base model:** \"Spreadtrum SC9863A-1H10 Board\" (from extracted DTB)"
+  echo ""
+  echo "Next bringup work usually focuses on:"
+  echo "- selecting the correct panel timing node from the DTB (many LCD candidates are present)"
+  echo "- touchscreen driver compatibility (e.g., gslx680)"
+  echo "- WCN Wi-Fi/BT firmware + interface wiring"
+  echo "- extracting vendor modules/firmware for userspace compatibility"
+  echo ""
+
+  hr
+
+  h2 "Appendix: Relevant artifact locations"
+
+  echo "- \`backup/boot-stock.img\`"
+  echo "- \`backup/dtb-stock-trimmed.dtb\` / \`backup/dtb-stock-trimmed.dts\`"
+  echo "- \`backup/dtbo.img\`"
+  echo "- \`backup/vbmeta*.img\`"
+  echo "- \`extracted/dtb_from_bootimg/\`"
+  echo "- \`extracted/dtbo_split/\`"
+  echo "- \`extracted/ramdisk_init/\`"
+  echo "- \`extracted/super_lpunpack/\`"
+  echo "- \`extracted/vendor_blobs/\` (if extracted)"
+  echo ""
+} > "$REPORT_MD"
+
+echo "[*] Wrote report:"
+echo "    $REPORT_MD"
+echo
+echo "[*] Preview (first 80 lines):"
+sed -n '1,80p' "$REPORT_MD"
+
+
+################################################################################
+### FILE: scripts/run_all.sh
+################################################################################
+
+#!/usr/bin/env bash
+# Interactive runner for Teclast P20HD bringup scripts (00..10)
+# - Tracks progress
+# - Logs output per step
+# - On failure: retry / skip / abort / view log
+#
+# Usage:
+#   bash scripts/run_all.sh
+#   bash scripts/run_all.sh --firmware /path/to/Firmware.rar
+#   bash scripts/run_all.sh -y
+
+set -Eeuo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
+LOG_DIR="${PROJECT_DIR}/logs"
+mkdir -p "${LOG_DIR}"
+
+# ---------------------------
+# Pretty output helpers
+# ---------------------------
+if [[ -t 1 ]]; then
+  BOLD=$'\033[1m'
+  DIM=$'\033[2m'
+  RED=$'\033[31m'
+  GREEN=$'\033[32m'
+  YELLOW=$'\033[33m'
+  BLUE=$'\033[34m'
+  RESET=$'\033[0m'
+else
+  BOLD="" DIM="" RED="" GREEN="" YELLOW="" BLUE="" RESET=""
+fi
+
+info()  { echo "${BLUE}[INFO]${RESET}  $*"; }
+ok()    { echo "${GREEN}[OK]${RESET}    $*"; }
+warn()  { echo "${YELLOW}[WARN]${RESET}  $*"; }
+err()   { echo "${RED}[ERR]${RESET}   $*"; }
+hr() { echo "${DIM}------------------------------------------------------------${RESET}"; }
+
+# ---------------------------
+# CLI options
+# ---------------------------
+NON_INTERACTIVE=0
+FROM_STEP="00"
+FIRMWARE_RAR="${FIRMWARE_RAR:-}"
+SUPER_IMG="${SUPER_IMG:-}"
+
+usage() {
+  cat <<EOF
+${BOLD}run_all.sh${RESET} — interactive bringup pipeline runner
+
+Usage:
+  bash scripts/run_all.sh [options]
+
+Options:
+  --firmware <path>   Path to official firmware .rar (Roshal archive)
+  --super <path>      Path to super.img (Android dynamic partitions container)
+  --from <NN>         Start from step NN (00..10)
+  -y, --yes           Non-interactive (auto-skip on failures)
+  -h, --help          Show help
+
+Examples:
+  bash scripts/run_all.sh --firmware ~/Downloads/P20HD_EEA_Firmware.rar
+  bash scripts/run_all.sh --from 03
+  bash scripts/run_all.sh -y
+EOF
+}
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --firmware) FIRMWARE_RAR="${2:-}"; shift 2;;
+    --super)    SUPER_IMG="${2:-}"; shift 2;;
+    --from)     FROM_STEP="${2:-}"; shift 2;;
+    -y|--yes)   NON_INTERACTIVE=1; shift;;
+    -h|--help)  usage; exit 0;;
+    *) err "Unknown argument: $1"; usage; exit 2;;
+  esac
+done
+
+# ---------------------------
+# Step definitions
+# ---------------------------
+STEPS=(
+  "00|00_devtools.sh|Install toolchain + setup workspace"
+  "01|01_extract_firmware.sh|Extract firmware (.rar → .pac → boot/dtbo/vbmeta/super)"
+  "02|02_unpack_and_extract_dtb.sh|Unpack boot.img + extract DTB (Device Tree Blob)"
+  "03|03_unpack_super_img.sh|Unpack super.img (dynamic partitions) via lpunpack"
+  "04|04_extract_vendor_blops.sh|Extract vendor blobs for bringup"
+  "05|05_collect_device_info.sh|Collect device runtime info via ADB (Android Debug Bridge)"
+  "06|06_extract_kernel_info.sh|Extract kernel strings/config hints"
+  "07|07_extract_vbmeta_info.sh|Parse vbmeta images (Android Verified Boot metadata)"
+  "08|08_split_dtbo_overlays.sh|Split dtbo.img overlays (Device Tree Blob Overlays)"
+  "09|09_extract_ramdisk_init.sh|Extract init/fstab/ueventd from ramdisk"
+  "10|10_bringup_report.sh|Generate bringup report summary"
+)
+
+step_ge() { local a="$1" b="$2"; ((10#$a >= 10#$b)); }
+script_path() { echo "${SCRIPT_DIR}/$1"; }
+need_cmd() { command -v "$1" >/dev/null 2>&1; }
+
+# ---------------------------
+# Smart defaults / detection
+# ---------------------------
+detect_super_img() {
+  if [[ -n "${SUPER_IMG}" && -f "${SUPER_IMG}" ]]; then echo "${SUPER_IMG}"; return 0; fi
+  local candidates=(
+    "${PROJECT_DIR}/firmware/super.img"
+    "${PROJECT_DIR}/firmware/extracted_pac/super.img"
+    "${PROJECT_DIR}/backup/super.img"
+  )
+  for c in "${candidates[@]}"; do
+    [[ -f "$c" ]] && { echo "$c"; return 0; }
+  done
+  echo ""
+}
+
+detect_firmware_rar() {
+  if [[ -n "${FIRMWARE_RAR}" && -f "${FIRMWARE_RAR}" ]]; then
+    echo "${FIRMWARE_RAR}"
+    return 0
+  fi
+
+  # Auto-detect in project root or firmware directory
+  local hits=()
+  while IFS= read -r -d '' f; do hits+=("$f"); done < <(find "${PROJECT_DIR}" -maxdepth 1 -type f -iname "*.rar" -print0 2>/dev/null || true)
+  while IFS= read -r -d '' f; do hits+=("$f"); done < <(find "${PROJECT_DIR}/firmware" -maxdepth 1 -type f -iname "*.rar" -print0 2>/dev/null || true)
+
+  if [[ "${#hits[@]}" -eq 1 ]]; then
+    echo "${hits[0]}"
+    return 0
+  fi
+
+  echo ""
+}
+
+confirm() {
+  local prompt="$1"
+  [[ "${NON_INTERACTIVE}" -eq 1 ]] && return 0
+  read -r -p "${prompt} [Y/n] " ans || true
+  case "${ans:-Y}" in n|N|no|NO) return 1;; *) return 0;; esac
+}
+
+pick_action_on_fail() {
+  local log="$1"
+  [[ "${NON_INTERACTIVE}" -eq 1 ]] && { echo "skip"; return 0; }
+
+  echo
+  warn "Choose action: ${BOLD}[r]etry${RESET}, ${BOLD}[s]kip${RESET}, ${BOLD}[a]bort${RESET}, ${BOLD}[v]iew log${RESET}"
+  while true; do
+    read -r -p "> " act || true
+    case "${act,,}" in
+      r|retry) echo "retry"; return 0;;
+      s|skip)  echo "skip";  return 0;;
+      a|abort) echo "abort"; return 0;;
+      v|view)
+        hr
+        info "Showing tail of log: ${log}"
+        tail -n 120 "${log}" || true
+        hr
+        ;;
+      *) echo "Type r / s / a / v";;
+    esac
+  done
+}
+
+run_step() {
+  local step_id="$1" step_script="$2" step_desc="$3"
+  local spath log rc action local_log
+
+  spath="$(script_path "${step_script}")"
+  [[ -f "${spath}" ]] || { err "Missing script: ${spath}"; return 127; }
+
+  log="${LOG_DIR}/${step_id}_${step_script}.log"
+
+  hr
+  echo "${BOLD}Step ${step_id}${RESET} — ${step_desc}"
+  echo "${DIM}${spath}${RESET}"
+  echo "${DIM}Log: ${log}${RESET}"
+  hr
+
+  local args=()
+
+  if [[ "${step_id}" == "01" ]]; then
+    local rar
+    rar="$(detect_firmware_rar)"
+    if [[ -z "${rar}" ]]; then
+      warn "Step 01 needs a firmware .rar path."
+      if [[ "${NON_INTERACTIVE}" -eq 1 ]]; then
+        err "No firmware path provided. Use --firmware /path/to/file.rar"
+        return 2
+      fi
+      read -r -p "Enter firmware .rar path: " rar
+    fi
+    [[ -f "${rar}" ]] || { err "Firmware .rar not found: ${rar}"; return 2; }
+    args+=("${rar}")
+  fi
+
+  if [[ "${step_id}" == "03" ]]; then
+    if ! need_cmd lpunpack; then
+      warn "lpunpack (Logical Partition unpack — super.img extractor) not found in PATH."
+      warn "Fix: run Step 00 first (it installs a working lpunpack wrapper)."
+      if ! confirm "Continue anyway?"; then
+        return 3
+      fi
+    fi
+    local s
+    s="$(detect_super_img)"
+    if [[ -z "${s}" ]]; then
+      warn "Could not auto-detect super.img."
+      if [[ "${NON_INTERACTIVE}" -eq 1 ]]; then
+        err "No super.img path provided. Use --super firmware/super.img"
+        return 2
+      fi
+      read -r -p "Enter super.img path: " s
+    fi
+    [[ -f "${s}" ]] || { err "super.img not found: ${s}"; return 2; }
+    args+=("${s}")
+  fi
+
+  if [[ "${step_id}" == "05" ]]; then
+    if ! need_cmd adb; then
+      warn "adb (Android Debug Bridge — USB device communication) not found in PATH."
+      if ! confirm "Continue anyway?"; then return 3; fi
+    else
+      local st
+      st="$(adb get-state 2>/dev/null || true)"
+      if [[ "${st}" != "device" ]]; then
+        warn "ADB device not detected (adb get-state != device)."
+        warn "If the tablet is not connected/authorized, Step 05 may fail."
+        if ! confirm "Continue with Step 05 anyway?"; then return 3; fi
+      fi
+    fi
+  fi
+
+  info "Running: bash ${step_script} ${args[*]:-}"
+  (
+    cd "${PROJECT_DIR}"
+    set +e
+    bash "${spath}" "${args[@]}" 2>&1 | tee "${log}"
+    exit "${PIPESTATUS[0]}"
+  )
+  rc=$?
+
+  [[ $rc -eq 0 ]] && ok "Step ${step_id} succeeded." || { err "Step ${step_id} FAILED (exit ${rc})."; warn "Log: ${log}"; }
+  return "${rc}"
+}
+
+# ---------------------------
+# Main run
+# ---------------------------
+echo "${BOLD}Teclast P20HD bringup pipeline — run_all.sh${RESET}"
+echo "Project: ${PROJECT_DIR}"
+echo "Logs:    ${LOG_DIR}"
+echo "Mode:    $([[ "${NON_INTERACTIVE}" -eq 1 ]] && echo "non-interactive (-y)" || echo "interactive")"
+echo "From:    ${FROM_STEP}"
+hr
+
+declare -A RESULTS=()
+FAILED=0
+SKIPPED=0
+OKCOUNT=0
+
+for line in "${STEPS[@]}"; do
+  IFS='|' read -r sid sfile sdesc <<< "${line}"
+
+  if ! step_ge "${sid}" "${FROM_STEP}"; then
+    RESULTS["${sid}"]="SKIP(from)"
+    ((SKIPPED++))
+    continue
+  fi
+
+  if [[ "${sid}" == "00" && -d "${PROJECT_DIR}/AIK" ]]; then
+    warn "Step 00 looks already done (AIK directory exists)."
+    if ! confirm "Run Step 00 anyway (apt update/install etc.)?"; then
+      RESULTS["${sid}"]="SKIP(user)"
+      ((SKIPPED++))
+      continue
+    fi
+  fi
+
+  while true; do
+    if run_step "${sid}" "${sfile}" "${sdesc}"; then
+      RESULTS["${sid}"]="OK"
+      ((OKCOUNT++))
+      break
+    else
+      RESULTS["${sid}"]="FAIL"
+      ((FAILED++))
+      local_log="${LOG_DIR}/${sid}_${sfile}.log"
+      action="$(pick_action_on_fail "${local_log}")"
+      case "${action}" in
+        retry) continue ;;
+        skip) warn "Skipping Step ${sid}."; RESULTS["${sid}"]="SKIP(fail)"; ((SKIPPED++)); break ;;
+        abort) err "Aborting pipeline on Step ${sid}."; break 2 ;;
+      esac
+    fi
+  done
+done
+
+hr
+echo "${BOLD}Pipeline summary${RESET}"
+hr
+
+for line in "${STEPS[@]}"; do
+  IFS='|' read -r sid sfile sdesc <<< "${line}"
+  status="${RESULTS[${sid}]:-SKIP}"
+  case "${status}" in
+    OK)    echo "${GREEN}✔${RESET} ${sid} ${sfile}  ${DIM}${sdesc}${RESET}" ;;
+    FAIL)  echo "${RED}✘${RESET} ${sid} ${sfile}  ${DIM}${sdesc}${RESET}" ;;
+    SKIP*) echo "${YELLOW}↷${RESET} ${sid} ${sfile}  ${DIM}${sdesc} (${status})${RESET}" ;;
+    *)     echo "${YELLOW}?${RESET} ${sid} ${sfile}  ${DIM}${sdesc} (${status})${RESET}" ;;
+  esac
+done
+
+hr
+echo "${BOLD}Counts${RESET}"
+echo "  OK:      ${OKCOUNT}"
+echo "  Skipped: ${SKIPPED}"
+echo "  Failed:  ${FAILED}"
+
+hr
+echo "${BOLD}Manual intervention notes${RESET}"
+echo "  - If Step 05 fails with Permission denied (/proc/cmdline or dmesg):"
+echo "      That's normal on locked user builds."
+echo "      Boot image cmdline + getprop dump is enough for bringup."
+echo
+echo "Next:"
+echo "  - Logs live in: ${LOG_DIR}"
+echo "  - Outputs live under: ${PROJECT_DIR}/extracted/ and ${PROJECT_DIR}/device-info/"
+hr
+
+exit 0
+

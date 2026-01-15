@@ -1,0 +1,291 @@
+################################################################################
+# Teclast P20HD bringup workspace
+################################################################################
+
+# ------------------------------------------------------------------------------
+# 1) Firmware archives (official vendor packages)
+# ------------------------------------------------------------------------------
+*.rar
+*.zip
+*.7z
+*.tar
+*.tar.gz
+*.tgz
+*.tar.xz
+*.txz
+*.tar.zst
+*.zst
+*.gz
+*.xz
+*.bz2
+*.lz4
+
+# Common download names / staging folders
+/downloads/
+/Download/
+/firmware/
+/fw/
+/rom/
+/roms/
+
+# ------------------------------------------------------------------------------
+# 2) Android firmware images / binary blobs (copyright-sensitive)
+# ------------------------------------------------------------------------------
+# Raw images / partitions / containers
+*.img
+*.bin
+*.elf
+*.mbn
+*.oem
+*.sin
+*.raw
+*.sparse
+*.chunk*
+*.dat
+*.new.dat
+*.br
+*.payload
+payload.bin
+
+# Common partition image names
+boot.img
+boot*.img
+init_boot.img
+recovery.img
+dtb.img
+dtbo.img
+vbmeta.img
+vbmeta*.img
+super.img
+system.img
+system_ext.img
+vendor.img
+product.img
+odm.img
+userdata.img
+cache.img
+persist.img
+metadata.img
+misc.img
+logo*.img
+splash*.img
+lk.img
+abl.img
+tz.img
+rpm.img
+hyp.img
+keymaster*.img
+cmnlib*.img
+devcfg.img
+modem*.img
+bluetooth*.img
+dsp*.img
+fsg*.img
+fsc*.img
+
+# Any extracted filesystem dumps (never commit these)
+system/
+system_ext/
+vendor/
+product/
+odm/
+oem/
+data/
+userdata/
+cache/
+persist/
+metadata/
+apex/
+firmware/
+firmware-update/
+lib/
+lib64/
+bin/
+etc/
+sepolicy*
+plat_sepolicy*
+vendor_sepolicy*
+manifest.xml
+compatibility_matrix*.xml
+
+# ------------------------------------------------------------------------------
+# 3) Output/work directories (idempotent pipeline scratch + results)
+# ------------------------------------------------------------------------------
+/out/
+/work/
+/tmp/
+/temp/
+/build/
+/dist/
+/export/
+/artifacts/
+/extracted/
+/unpacked/
+/mount/
+/mnt/
+/rootfs/
+/staging/
+
+# If your scripts use these
+/lonelyfool/
+/tools/tmp/
+/scripts/tmp/
+
+# ------------------------------------------------------------------------------
+# 4) Device-side dumps (can contain serials, identifiers, logs)
+# ------------------------------------------------------------------------------
+/device_dumps/
+/dumps/
+/logs/
+/log/
+/debug/
+/debug_out/
+/captures/
+/recordings/
+
+# Android property dumps / boot logs / kernel logs
+*getprop*.txt
+*props*.txt
+*.prop
+*logcat*.txt
+*dmesg*.txt
+*last_kmsg*
+*lastlog*
+*.log
+
+# Crash dumps / ram dumps / tombstones
+ramdump*
+*.ramdump
+tombstone*
+anr*
+dropbox*
+panic*
+minidump*
+*.core
+
+# ------------------------------------------------------------------------------
+# 5) Decompiled / reverse-engineering outputs (avoid accidental commits)
+# ------------------------------------------------------------------------------
+/decompile/
+/decompiled/
+/jadx/
+/apktool/
+/smali/
+/baksmali/
+/dex/
+/odex/
+/vdex/
+/oat/
+/classes*.dex
+*.apk
+*.aab
+*.jar
+*.aar
+
+# ------------------------------------------------------------------------------
+# 6) Kernel / device tree build artifacts (safe to ignore; huge + noisy)
+# ------------------------------------------------------------------------------
+*.dtb
+*.dtbo
+*.dts
+*.dtso
+*.ko
+*.mod
+*.mod.c
+*.cmd
+*.symvers
+Module.symvers
+modules.order
+*.o
+*.a
+*.so
+*.lzma
+*.cpio
+*.cpio.gz
+*.cpio.xz
+zImage
+Image
+Image.gz
+Image.lz4
+uImage
+
+# ------------------------------------------------------------------------------
+# 7) Python caches / virtual environments
+# ------------------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+*.egg-info/
+.eggs/
+
+.venv/
+venv/
+ENV/
+env/
+
+# ------------------------------------------------------------------------------
+# 8) Node / TypeScript tooling (if you ever add helpers)
+# ------------------------------------------------------------------------------
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dist/
+.cache/
+
+# ------------------------------------------------------------------------------
+# 9) Go / Rust build outputs (in case you add tooling)
+# ------------------------------------------------------------------------------
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+target/
+
+# ------------------------------------------------------------------------------
+# 10) OS + editor junk
+# ------------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+.idea/
+.vscode/
+*.code-workspace
+
+*.swp
+*.swo
+*~
+*.bak
+*.tmp
+
+# ------------------------------------------------------------------------------
+# 11) Secrets / environment / credentials (always ignore)
+# ------------------------------------------------------------------------------
+.env
+.env.*
+*.env
+*.key
+*.pem
+*.p12
+*.pfx
+*.keystore
+*.jks
+*.kdbx
+*.gpg
+*.asc
+
+# ------------------------------------------------------------------------------
+# 12) Optional: allow placeholder files to keep empty dirs in git
+# ------------------------------------------------------------------------------
+!.gitkeep
