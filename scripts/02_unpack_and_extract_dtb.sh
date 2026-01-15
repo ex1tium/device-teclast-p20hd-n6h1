@@ -59,3 +59,41 @@ done
 
 echo "==> Done. DTB/DTS output:"
 ls -lh "$OUT_DTB" | head -n 80
+
+# Copy primary DTB to backup/ for easy reference (postmarketOS porting uses this)
+BACKUP_DIR="$PROJECT_DIR/backup"
+mkdir -p "$BACKUP_DIR"
+
+# Find the first/primary DTB (typically 00_kernel or first numbered DTB)
+PRIMARY_DTB=""
+for candidate in "$OUT_DTB"/00_kernel "$OUT_DTB"/01_dtb "$OUT_DTB"/*.dtb; do
+  if [[ -f "$candidate" && -s "$candidate" ]]; then
+    PRIMARY_DTB="$candidate"
+    break
+  fi
+done
+
+if [[ -n "$PRIMARY_DTB" && -f "$PRIMARY_DTB" ]]; then
+  echo "==> Copying primary DTB to backup/dtb-stock-trimmed.dtb"
+  cp "$PRIMARY_DTB" "$BACKUP_DIR/dtb-stock-trimmed.dtb"
+
+  # Also decompile to DTS in backup for easy reference
+  echo "==> Decompiling backup DTB -> DTS..."
+  if command -v dtc >/dev/null 2>&1; then
+    dtc -I dtb -O dts -o "$BACKUP_DIR/dtb-stock-trimmed.dts" "$BACKUP_DIR/dtb-stock-trimmed.dtb" 2>/dev/null || true
+  else
+    # Fallback: look for existing DTS from extraction
+    EXISTING_DTS=$(find "$OUT_DTB" -name "*.dts" -type f | head -1)
+    if [[ -n "$EXISTING_DTS" && -f "$EXISTING_DTS" ]]; then
+      echo "[*] dtc not found, copying existing DTS: $EXISTING_DTS"
+      cp "$EXISTING_DTS" "$BACKUP_DIR/dtb-stock-trimmed.dts"
+    else
+      echo "[!] dtc not found and no existing DTS to copy"
+    fi
+  fi
+
+  echo "==> Backup DTB files:"
+  ls -lh "$BACKUP_DIR"/dtb-stock-trimmed.* 2>/dev/null || true
+else
+  echo "[!] Warning: Could not identify primary DTB to copy to backup/"
+fi

@@ -45,7 +45,31 @@ adb shell uname -a | tee "$OUTDIR/uname_a.txt" >/dev/null || true
 adb shell cat /proc/version | tee "$OUTDIR/proc_version.txt" >/dev/null || true
 
 echo "[*] Attempting /proc/cmdline (may be blocked on locked user builds)..."
-adb shell cat /proc/cmdline | tee "$OUTDIR/proc_cmdline.txt" >/dev/null || true
+adb shell cat /proc/cmdline 2>/dev/null | tee "$OUTDIR/proc_cmdline.txt" >/dev/null || true
+
+echo "[*] Collecting partition layout..."
+adb shell ls -la /dev/block/by-name/ 2>/dev/null | tee "$OUTDIR/partition_layout.txt" >/dev/null || true
+
+echo "[*] Collecting input device info (touchscreen hints)..."
+adb shell ls -la /sys/class/input/ 2>/dev/null | tee "$OUTDIR/input_devices.txt" >/dev/null || true
+
+echo "[*] Collecting display info..."
+adb shell dumpsys display 2>/dev/null | head -100 | tee "$OUTDIR/display_info.txt" >/dev/null || true
+
+echo "[*] Collecting loaded kernel modules..."
+adb shell "ls /sys/module/ | sort" 2>/dev/null | tee "$OUTDIR/loaded_modules.txt" >/dev/null || true
+
+echo "[*] Collecting SoC info from /sys..."
+{
+  echo "=== /sys/firmware info (may require root) ==="
+  adb shell "cat /sys/firmware/devicetree/base/model" 2>&1 || true
+  adb shell "cat /sys/firmware/devicetree/base/compatible" 2>&1 || true
+} | tee "$OUTDIR/soc_info.txt" >/dev/null || true
+
+echo "[*] Collecting bootloader/OEM unlock status..."
+adb shell getprop 2>/dev/null | grep -E "(oem|unlock|locked|flash|boot\.vbmeta)" \
+  | tee "$OUTDIR/bootloader_status.txt" >/dev/null || true
 
 echo
-echo "[*] Done."
+echo "[*] Done. Collected files:"
+ls -la "$OUTDIR"

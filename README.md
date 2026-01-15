@@ -91,59 +91,194 @@ From the official firmware package, the pipeline extracts and indexes:
 
 ## Requirements
 
-The scripts target a Debian/Ubuntu-style host and use `apt`.
+### Host System Setup (Distrobox)
 
-Primary runtime requirements:
+This project is designed to run inside a **distrobox container** for maximum compatibility, especially on immutable Linux distributions (Fedora Silverblue/Kinoite, Bazzite, etc.).
 
-* `bash`
-* `git`
-* `python3`
-* `adb` *(Android Debug Bridge — USB device communication)*
-* `fastboot` *(Android Fastboot — bootloader flashing mode)*
-* `dtc` *(Device Tree Compiler — DTB/DTS toolchain)*
-* `simg2img` *(Android sparse image converter)*
-* `lpunpack` *(Android logical partition extractor)*
+**Create the distrobox (Ubuntu 22.04 recommended):**
 
-Step `scripts/00_devtools.sh` installs these automatically and also sets up:
+```bash
+distrobox create --name teclast-dev --image ubuntu:22.04
+distrobox enter teclast-dev
+```
 
+All pipeline scripts should be run **inside the distrobox**:
+
+```bash
+# Option 1: Enter distrobox first
+distrobox enter teclast-dev
+bash scripts/run_all.sh
+
+# Option 2: Run directly with distrobox
+distrobox enter teclast-dev -- bash scripts/run_all.sh
+```
+
+### Android Device Preparation
+
+For the best possible bringup report, the device should be prepared as follows:
+
+#### 1. Enable Developer Options
+
+On the Android device:
+1. Go to **Settings** → **About tablet**
+2. Tap **Build number** 7 times until "You are now a developer!" appears
+
+#### 2. Enable USB Debugging
+
+1. Go to **Settings** → **System** → **Developer options**
+2. Enable **USB debugging**
+3. Connect the device via USB cable
+4. Accept the "Allow USB debugging?" prompt on the device (check "Always allow from this computer")
+
+#### 3. Enable OEM Unlock (Recommended)
+
+1. In **Developer options**, enable **OEM unlocking**
+   - This allows bootloader unlock for future flashing
+   - Note: The bootloader remains locked until you explicitly unlock it via fastboot
+
+#### 4. Verify ADB Connection
+
+```bash
+# Inside distrobox
+adb devices -l
+```
+
+You should see output like:
+```
+List of devices attached
+0123456789ABCDEF       device usb:1-10.2 product:P20HD_EEA model:P20HD_EEA device:P20HD_EEA transport_id:1
+```
+
+If you see `unauthorized`, check the device screen for the USB debugging prompt.
+
+#### 5. Optional: Collect Additional Runtime Data
+
+For the most complete report, keep the device:
+- **Powered on and unlocked** during `05_collect_device_info.sh`
+- **Connected via USB** with ADB authorized
+
+The script collects:
+- Full `getprop` dump (device properties, bootloader status)
+- Partition layout (`/dev/block/by-name/`)
+- Input devices (touchscreen hints)
+- Display info
+- Loaded kernel modules
+- SoC firmware info
+
+### Software Requirements
+
+The scripts target a Debian/Ubuntu-style environment and use `apt`.
+
+**Primary runtime requirements:**
+
+| Tool | Purpose |
+|------|---------|
+| `bash` | Script runtime |
+| `git` | Clone helper repositories |
+| `python3` | Script runtime + Python tools |
+| `adb` | Android Debug Bridge — USB device communication |
+| `fastboot` | Android Fastboot — bootloader flashing mode |
+| `dtc` | Device Tree Compiler — DTB/DTS decompilation |
+| `extract-dtb` | Python tool to extract DTBs from boot images |
+| `simg2img` | Android sparse image converter |
+| `lpunpack` | Android logical partition extractor |
+| `unrar` / `7z` | RAR archive extraction |
+| `debugfs` | ext4 filesystem extraction (fallback) |
+
+**Step `scripts/00_devtools.sh` installs these automatically**, including:
+
+* `device-tree-compiler` (provides `dtc`)
+* `extract-dtb` Python package
 * `AIK (Android Image Kitchen)` for boot image unpacking
 * `pacextractor` for Spreadtrum/Unisoc `.pac` extraction
 * `pmbootstrap` + `pmaports` (postmarketOS reference toolchain/tree)
 * fallback partition tools (if `lpunpack` is missing system-wide)
 
+### Manual Tool Installation (if needed)
+
+Inside the distrobox:
+
+```bash
+# Core packages
+sudo apt update
+sudo apt install -y \
+  device-tree-compiler \
+  android-sdk-libsparse-utils \
+  adb fastboot \
+  e2fsprogs \
+  unrar p7zip-full
+
+# Python packages
+pip3 install --user extract-dtb
+```
+
 ---
 
 ## Quickstart (end-to-end)
 
-Place the firmware `.rar` into the project root (recommended):
+### Step 1: Prepare the Environment
+
+```bash
+# Create and enter distrobox (first time only)
+distrobox create --name teclast-dev --image ubuntu:22.04
+distrobox enter teclast-dev
+
+# Navigate to project directory
+cd /path/to/teclast_p20hd_n6h1_postmarketos
+```
+
+### Step 2: Place the Firmware
+
+Download the firmware from Teclast and place the `.rar` into the project root:
 
 ```bash
 cp "~/Downloads/P20HD(N6H1)_Android10.0_EEA_V1.07_20211023.rar" \
   ./P20HD(N6H1)_Android10.0_EEA_V1.07_20211023.rar
 ```
 
-Install toolchain + workspace dependencies:
+### Step 3: Install Dependencies
 
 ```bash
+# Inside distrobox
 bash scripts/00_devtools.sh
 ```
 
-Run the full extraction pipeline:
+### Step 4: Connect the Device (Optional but Recommended)
+
+1. Enable Developer Options + USB Debugging on the device (see [Android Device Preparation](#android-device-preparation))
+2. Connect via USB
+3. Verify: `adb devices -l`
+
+### Step 5: Run the Pipeline
 
 ```bash
-bash scripts/run_all.sh
+# Inside distrobox if tools already installed (start from step 01)
+bash scripts/run_all.sh --from 01
 ```
 
-The pipeline runner supports explicit firmware selection:
+**Alternative invocation methods:**
 
 ```bash
+# Explicit firmware selection
 bash scripts/run_all.sh --firmware "./P20HD(N6H1)_Android10.0_EEA_V1.07_20211023.rar"
+
+# Non-interactive mode (auto-skip failures)
+bash scripts/run_all.sh -y
+
+# Start from a specific step
+bash scripts/run_all.sh --from 03
+
+# Run from outside distrobox
+distrobox enter teclast-dev -- bash scripts/run_all.sh -y
 ```
 
-Non-interactive mode is supported:
+### Step 6: Review the Report
 
 ```bash
-bash scripts/run_all.sh -y
+# View the generated report
+cat reports/bringup_report.md
+
+# Or open in your favorite markdown viewer
 ```
 
 ---
@@ -320,14 +455,109 @@ Output:
 
 ---
 
-## Troubleshooting signals
+## Troubleshooting
 
-Common issues encountered during early bringup extraction:
+### Common Issues
 
-* `lpunpack` missing: ensure Step `00_devtools.sh` was executed successfully
-* sparse images: `simg2img` conversion is required before mounting/inspection
-* container/mount limitations: vendor extraction falls back to `debugfs`
-* unusual firmware layouts: Unisoc packages may nest images under `.pac` contents
+#### "command not found: dtc" or "ModuleNotFoundError: extract_dtb"
+
+**Cause:** Running scripts outside the distrobox, or tools not installed.
+
+**Fix:**
+```bash
+# Make sure you're inside distrobox
+distrobox enter teclast-dev
+
+# Verify tools are installed
+which dtc
+python3 -c "import extract_dtb; print('OK')"
+
+# If missing, install manually
+sudo apt install -y device-tree-compiler
+pip3 install --user extract-dtb
+```
+
+#### ADB shows "no devices" or "unauthorized"
+
+**Cause:** USB debugging not enabled, or device not authorized.
+
+**Fix:**
+1. Check device screen for "Allow USB debugging?" prompt
+2. Ensure USB cable supports data transfer (not charge-only)
+3. Try different USB port
+4. Restart ADB server: `adb kill-server && adb devices`
+
+#### "lpunpack: command not found"
+
+**Cause:** `lpunpack` not installed or not in PATH.
+
+**Fix:** The pipeline uses a Python fallback automatically. If issues persist:
+```bash
+# Check if lpunpack exists
+which lpunpack
+
+# Use Python fallback explicitly
+python3 tools/lpunpack.py extracted/super.raw.img extracted/super_lpunpack/
+```
+
+#### Vendor kernel modules empty (0 .ko files)
+
+**Cause:** `debugfs` extraction has limitations with some directory structures.
+
+**Fix:** Mount vendor.img manually with root privileges:
+```bash
+sudo mount -o loop,ro extracted/super_lpunpack/vendor.img /mnt
+cp -a /mnt/lib/modules extracted/vendor_blobs/lib/
+sudo umount /mnt
+```
+
+#### Sparse image errors
+
+**Cause:** Image needs conversion from Android sparse format to raw.
+
+**Fix:**
+```bash
+simg2img input.img output.raw.img
+```
+
+#### Script fails with "set -e" errors
+
+**Cause:** Bash strict mode exits on any command failure.
+
+**Fix:** Most scripts handle this gracefully. If a specific command fails:
+- Check the log file in `logs/` for details
+- Use `--from NN` to resume from a specific step
+
+### Report Quality Checklist
+
+For the **best possible bringup report**, ensure:
+
+| Item | Status | How to Check |
+|------|--------|--------------|
+| Device connected via ADB | Required for runtime data | `adb devices -l` shows device |
+| USB debugging authorized | Required | No "unauthorized" in adb devices |
+| Developer options enabled | Required for ADB | Device settings |
+| OEM unlock enabled | Recommended | Developer options → OEM unlocking |
+| Device screen unlocked | Recommended | Prevents ADB timeouts |
+| Firmware .rar present | Required | File exists in project root |
+| Distrobox entered | Required | Run inside `teclast-dev` |
+| 00_devtools.sh completed | Required | Tools installed successfully |
+
+### What Each Script Needs
+
+| Script | Needs Device? | Needs Firmware? | Notes |
+|--------|--------------|-----------------|-------|
+| 00_devtools.sh | No | No | Installs tools only |
+| 01_extract_firmware.sh | No | Yes | Extracts .rar → .pac → images |
+| 02_unpack_and_extract_dtb.sh | No | Yes (boot.img) | Needs `dtc`, `extract-dtb` |
+| 03_unpack_super_img.sh | No | Yes (super.img) | Needs `lpunpack`, `simg2img` |
+| 04_extract_vendor_blobs.sh | No | Yes (vendor.img) | May need `sudo` for best results |
+| 05_collect_device_info.sh | **Yes** | No | Collects runtime device data |
+| 06_extract_kernel_info.sh | No | Yes (boot.img) | Analyzes kernel binary |
+| 07_extract_vbmeta_info.sh | No | Yes (vbmeta*.img) | Parses AVB metadata |
+| 08_split_dtbo_overlays.sh | No | Yes (dtbo.img) | Needs `dtc` |
+| 09_extract_ramdisk_init.sh | No | Yes (ramdisk) | Extracts init configs |
+| 10_bringup_report.sh | Optional | Yes | Generates final report |
 
 ---
 

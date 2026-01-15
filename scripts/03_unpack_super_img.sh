@@ -44,15 +44,30 @@ fi
 # Convert sparse -> raw if needed
 RAW_IMG="$PROJECT_DIR/extracted/super.raw.img"
 if file "$SUPER_IMG" | grep -qi "sparse"; then
-  if ! command -v simg2img >/dev/null 2>&1; then
-    echo "ERROR: simg2img not found (Android sparse converter)."
+  # Prefer system simg2img (works correctly) over local builds that may have broken deps
+  SIMG2IMG_BIN=""
+  for candidate in /usr/bin/simg2img "$(command -v simg2img 2>/dev/null || true)"; do
+    if [[ -x "$candidate" ]]; then
+      # Test that the binary can actually run (not missing libs)
+      # simg2img prints "Usage:" to stderr when run without args
+      # Use a subshell without pipefail to avoid exit code issues
+      if ( set +o pipefail; "$candidate" 2>&1 | grep -q "Usage:" ); then
+        SIMG2IMG_BIN="$candidate"
+        break
+      fi
+    fi
+  done
+
+  if [[ -z "$SIMG2IMG_BIN" ]]; then
+    echo "ERROR: simg2img not found or broken (Android sparse converter)."
     echo "Install: sudo apt install -y android-sdk-libsparse-utils"
     exit 3
   fi
 
   if [[ ! -f "$RAW_IMG" || ! -s "$RAW_IMG" ]]; then
     echo "[*] Sparse super.img detected -> converting to raw: $RAW_IMG"
-    simg2img "$SUPER_IMG" "$RAW_IMG"
+    echo "[*] Using: $SIMG2IMG_BIN"
+    "$SIMG2IMG_BIN" "$SUPER_IMG" "$RAW_IMG"
   else
     echo "[*] Raw super image already exists: $RAW_IMG"
   fi
@@ -65,7 +80,8 @@ rm -f "$OUTDIR"/*.img 2>/dev/null || true
 
 if [[ -n "$LPUNPACK_BIN" ]]; then
   echo "[*] Using binary lpunpack: $LPUNPACK_BIN"
-  "$LPUNPACK_BIN" -v "$SUPER_IMG" "$OUTDIR"
+  # Some lpunpack versions don't support -v, try without if it fails
+  "$LPUNPACK_BIN" "$SUPER_IMG" "$OUTDIR" || "$LPUNPACK_BIN" -v "$SUPER_IMG" "$OUTDIR"
 else
   echo "[*] Using python lpunpack: $LPUNPACK_PY"
   python3 "$LPUNPACK_PY" "$SUPER_IMG" "$OUTDIR"

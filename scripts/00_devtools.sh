@@ -326,6 +326,9 @@ fastboot --version 2>&1 | head -n1 || true
 echo -n "DTC (Device Tree Compiler — DTB/DTS tool) version: "
 dtc --version 2>&1 | head -n1 || true
 
+echo -n "extract-dtb (Python DTB extractor) version: "
+python3 -c "import extract_dtb; print('OK')" 2>/dev/null || echo "(MISSING - run: pip3 install --user extract-dtb)"
+
 echo -n "simg2img (Android sparse image converter) path: "
 command -v simg2img || true
 
@@ -340,4 +343,9 @@ pmbootstrap --version 2>/dev/null || echo "(pmbootstrap installed; restart shell
 
 echo ""
 echo "=== Setup complete ==="
+echo ""
+echo "IMPORTANT: Run all scripts inside the distrobox container:"
+echo "  distrobox enter teclast-dev"
+echo "  bash scripts/run_all.sh"
+echo ""
 echo "If PATH changes were added, restart the shell (or run: exec \$SHELL -l)."

@@ -1,20 +1,16 @@
 #!/usr/bin/env bash
 # Interactive runner for Teclast P20HD bringup scripts (00..10)
-# - Tracks progress
+# - Tracks progress via logs/.state/*.ok
 # - Logs output per step
 # - On failure: retry / skip / abort / view log
-#
-# Usage:
-#   bash scripts/run_all.sh
-#   bash scripts/run_all.sh --firmware /path/to/Firmware.rar
-#   bash scripts/run_all.sh -y
 
 set -Eeuo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd -- "${SCRIPT_DIR}/.." && pwd)"
 LOG_DIR="${PROJECT_DIR}/logs"
-mkdir -p "${LOG_DIR}"
+STATE_DIR="${LOG_DIR}/.state"
+mkdir -p "${LOG_DIR}" "${STATE_DIR}"
 
 # ---------------------------
 # Pretty output helpers
@@ -42,6 +38,7 @@ hr() { echo "${DIM}------------------------------------------------------------$
 # ---------------------------
 NON_INTERACTIVE=0
 FROM_STEP="00"
+FORCE=0
 FIRMWARE_RAR="${FIRMWARE_RAR:-}"
 SUPER_IMG="${SUPER_IMG:-}"
 
@@ -56,6 +53,7 @@ Options:
   --firmware <path>   Path to official firmware .rar (Roshal archive)
   --super <path>      Path to super.img (Android dynamic partitions container)
   --from <NN>         Start from step NN (00..10)
+  --force             Re-run steps even if logs/.state/NN.ok exists
   -y, --yes           Non-interactive (auto-skip on failures)
   -h, --help          Show help
 
@@ -68,9 +66,22 @@ EOF
 
 while [[ $# -gt 0 ]]; do
   case "$1" in
-    --firmware) FIRMWARE_RAR="${2:-}"; shift 2;;
-    --super)    SUPER_IMG="${2:-}"; shift 2;;
+    --firmware)
+      FIRMWARE_RAR="${2:-}"
+      # Convert to absolute path if relative
+      if [[ -n "${FIRMWARE_RAR}" && "${FIRMWARE_RAR}" != /* && -f "${FIRMWARE_RAR}" ]]; then
+        FIRMWARE_RAR="$(cd "$(dirname "${FIRMWARE_RAR}")" && pwd)/$(basename "${FIRMWARE_RAR}")"
+      fi
+      shift 2;;
+    --super)
+      SUPER_IMG="${2:-}"
+      # Convert to absolute path if relative
+      if [[ -n "${SUPER_IMG}" && "${SUPER_IMG}" != /* && -f "${SUPER_IMG}" ]]; then
+        SUPER_IMG="$(cd "$(dirname "${SUPER_IMG}")" && pwd)/$(basename "${SUPER_IMG}")"
+      fi
+      shift 2;;
     --from)     FROM_STEP="${2:-}"; shift 2;;
+    --force)    FORCE=1; shift;;
     -y|--yes)   NON_INTERACTIVE=1; shift;;
     -h|--help)  usage; exit 0;;
     *) err "Unknown argument: $1"; usage; exit 2;;
@@ -85,8 +96,8 @@ STEPS=(
   "01|01_extract_firmware.sh|Extract firmware (.rar → .pac → boot/dtbo/vbmeta/super)"
   "02|02_unpack_and_extract_dtb.sh|Unpack boot.img + extract DTB (Device Tree Blob)"
   "03|03_unpack_super_img.sh|Unpack super.img (dynamic partitions) via lpunpack"
-  "04|04_extract_vendor_blops.sh|Extract vendor blobs for bringup"
-  "05|05_collect_device_info.sh|Collect device runtime info via ADB (Android Debug Bridge)"
+  "04|04_extract_vendor_blobs.sh|Extract vendor blobs for bringup"
+  "05|05_collect_device_info.sh|Collect device runtime info via ADB (Android Debug Bridge — USB device communication)"
   "06|06_extract_kernel_info.sh|Extract kernel strings/config hints"
   "07|07_extract_vbmeta_info.sh|Parse vbmeta images (Android Verified Boot metadata)"
   "08|08_split_dtbo_overlays.sh|Split dtbo.img overlays (Device Tree Blob Overlays)"
@@ -120,7 +131,6 @@ detect_firmware_rar() {
     return 0
   fi
 
-  # Auto-detect in project root or firmware directory
   local hits=()
   while IFS= read -r -d '' f; do hits+=("$f"); done < <(find "${PROJECT_DIR}" -maxdepth 1 -type f -iname "*.rar" -print0 2>/dev/null || true)
   while IFS= read -r -d '' f; do hits+=("$f"); done < <(find "${PROJECT_DIR}/firmware" -maxdepth 1 -type f -iname "*.rar" -print0 2>/dev/null || true)
@@ -165,7 +175,7 @@ pick_action_on_fail() {
 
 run_step() {
   local step_id="$1" step_script="$2" step_desc="$3"
-  local spath log rc action local_log
+  local spath log rc
 
   spath="$(script_path "${step_script}")"
   [[ -f "${spath}" ]] || { err "Missing script: ${spath}"; return 127; }
@@ -217,21 +227,6 @@ run_step() {
     args+=("${s}")
   fi
 
-  if [[ "${step_id}" == "05" ]]; then
-    if ! need_cmd adb; then
-      warn "adb (Android Debug Bridge — USB device communication) not found in PATH."
-      if ! confirm "Continue anyway?"; then return 3; fi
-    else
-      local st
-      st="$(adb get-state 2>/dev/null || true)"
-      if [[ "${st}" != "device" ]]; then
-        warn "ADB device not detected (adb get-state != device)."
-        warn "If the tablet is not connected/authorized, Step 05 may fail."
-        if ! confirm "Continue with Step 05 anyway?"; then return 3; fi
-      fi
-    fi
-  fi
-
   info "Running: bash ${step_script} ${args[*]:-}"
   (
     cd "${PROJECT_DIR}"
@@ -241,7 +236,15 @@ run_step() {
   )
   rc=$?
 
-  [[ $rc -eq 0 ]] && ok "Step ${step_id} succeeded." || { err "Step ${step_id} FAILED (exit ${rc})."; warn "Log: ${log}"; }
+  if [[ $rc -eq 0 ]]; then
+    ok "Step ${step_id} succeeded."
+    touch "${STATE_DIR}/${step_id}.ok"
+  else
+    err "Step ${step_id} FAILED (exit ${rc})."
+    warn "Log: ${log}"
+    rm -f "${STATE_DIR}/${step_id}.ok" 2>/dev/null || true
+  fi
+
   return "${rc}"
 }
 
@@ -253,6 +256,7 @@ echo "Project: ${PROJECT_DIR}"
 echo "Logs:    ${LOG_DIR}"
 echo "Mode:    $([[ "${NON_INTERACTIVE}" -eq 1 ]] && echo "non-interactive (-y)" || echo "interactive")"
 echo "From:    ${FROM_STEP}"
+echo "Force:   $([[ "${FORCE}" -eq 1 ]] && echo "yes" || echo "no")"
 hr
 
 declare -A RESULTS=()
@@ -265,15 +269,15 @@ for line in "${STEPS[@]}"; do
 
   if ! step_ge "${sid}" "${FROM_STEP}"; then
     RESULTS["${sid}"]="SKIP(from)"
-    ((SKIPPED++))
+    SKIPPED=$((SKIPPED + 1))
     continue
   fi
 
-  if [[ "${sid}" == "00" && -d "${PROJECT_DIR}/AIK" ]]; then
-    warn "Step 00 looks already done (AIK directory exists)."
-    if ! confirm "Run Step 00 anyway (apt update/install etc.)?"; then
-      RESULTS["${sid}"]="SKIP(user)"
-      ((SKIPPED++))
+  if [[ "${FORCE}" -eq 0 && -f "${STATE_DIR}/${sid}.ok" ]]; then
+    warn "Step ${sid} already completed (${STATE_DIR}/${sid}.ok)."
+    if ! confirm "Re-run Step ${sid}?"; then
+      RESULTS["${sid}"]="SKIP(done)"
+      SKIPPED=$((SKIPPED + 1))
       continue
     fi
   fi
@@ -281,16 +285,16 @@ for line in "${STEPS[@]}"; do
   while true; do
     if run_step "${sid}" "${sfile}" "${sdesc}"; then
       RESULTS["${sid}"]="OK"
-      ((OKCOUNT++))
+      OKCOUNT=$((OKCOUNT + 1))
       break
     else
       RESULTS["${sid}"]="FAIL"
-      ((FAILED++))
+      FAILED=$((FAILED + 1))
       local_log="${LOG_DIR}/${sid}_${sfile}.log"
       action="$(pick_action_on_fail "${local_log}")"
       case "${action}" in
         retry) continue ;;
-        skip) warn "Skipping Step ${sid}."; RESULTS["${sid}"]="SKIP(fail)"; ((SKIPPED++)); break ;;
+        skip) warn "Skipping Step ${sid}."; RESULTS["${sid}"]="SKIP(fail)"; SKIPPED=$((SKIPPED + 1)); break ;;
         abort) err "Aborting pipeline on Step ${sid}."; break 2 ;;
       esac
     fi
@@ -319,14 +323,8 @@ echo "  Skipped: ${SKIPPED}"
 echo "  Failed:  ${FAILED}"
 
 hr
-echo "${BOLD}Manual intervention notes${RESET}"
-echo "  - If Step 05 fails with Permission denied (/proc/cmdline or dmesg):"
-echo "      That's normal on locked user builds."
-echo "      Boot image cmdline + getprop dump is enough for bringup."
-echo
-echo "Next:"
-echo "  - Logs live in: ${LOG_DIR}"
-echo "  - Outputs live under: ${PROJECT_DIR}/extracted/ and ${PROJECT_DIR}/device-info/"
+echo "Logs live in: ${LOG_DIR}"
+echo "State files:  ${STATE_DIR}"
 hr
 
 exit 0

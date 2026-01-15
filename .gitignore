@@ -3,6 +3,28 @@
 ################################################################################
 
 # ------------------------------------------------------------------------------
+# 0) Project-specific generated/cloned directories
+# ------------------------------------------------------------------------------
+# Cloned tool repositories (created by 00_devtools.sh)
+/AIK/
+/tools/
+/pmbootstrap/
+/pmaports/
+
+# Generated output directories
+/backup/
+/extracted/
+/device-info/
+/reports/
+/logs/
+/work/
+/out/
+/firmware/
+
+# State files from run_all.sh
+/state/
+
+# ------------------------------------------------------------------------------
 # 1) Firmware archives (official vendor packages)
 # ------------------------------------------------------------------------------
 *.rar

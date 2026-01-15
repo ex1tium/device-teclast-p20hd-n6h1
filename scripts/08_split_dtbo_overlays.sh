@@ -34,6 +34,10 @@ echo "[*] DTBO image: $DTBO_IMG"
 file "$DTBO_IMG" || true
 echo "[*] Output dir: $OUTDIR"
 
+# Export for Python heredoc
+export DTBO_IMG="$DTBO_IMG"
+export OUTDIR="$OUTDIR"
+
 python3 - <<'PY'
 import os, struct
 
@@ -87,8 +91,6 @@ for i in range(entry_count):
 
 print(f"Extracted overlays into {outdir}")
 PY
-export DTBO_IMG="$DTBO_IMG"
-export OUTDIR="$OUTDIR"
 
 echo
 echo "[*] Decompiling DTBs -> DTS..."
