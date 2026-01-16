@@ -1,0 +1,10 @@
+#!/usr/bin/make -f
+
+%:
+	dh $@
+
+override_dh_install:
+	dh_install
+	# Install sparse files to system root
+	mkdir -p debian/adaptation-teclast-p20hd
+	cp -a sparse/* debian/adaptation-teclast-p20hd/ || true

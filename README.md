@@ -49,20 +49,28 @@ Only the **`.rar`** firmware archive is required.
 .
 ├── LICENSE
 ├── README.md
-└── scripts
-    ├── 00_devtools.sh
-    ├── 01_extract_firmware.sh
-    ├── 02_unpack_and_extract_dtb.sh
-    ├── 03_unpack_super_img.sh
-    ├── 04_extract_vendor_blobs.sh
-    ├── 05_collect_device_info.sh
-    ├── 06_extract_bootimg_info.sh
-    ├── 07_extract_vbmeta_info.sh
-    ├── 08_split_dtbo_overlays.sh
-    ├── 09_extract_ramdisk_init.sh
-    ├── 11_bringup_report.sh
-    ├── 12_unlock_bootloader.sh      # Manual only — not in run_all.sh
-    └── run_all.sh
+├── scripts/
+│   ├── 00_devtools.sh
+│   ├── 01_extract_firmware.sh
+│   ├── 02_unpack_and_extract_dtb.sh
+│   ├── 03_unpack_super_img.sh
+│   ├── 04_extract_vendor_blobs.sh
+│   ├── 05_collect_device_info.sh
+│   ├── 06_extract_bootimg_info.sh
+│   ├── 07_extract_vbmeta_info.sh
+│   ├── 08_split_dtbo_overlays.sh
+│   ├── 09_extract_ramdisk_init.sh
+│   ├── 11_bringup_report.sh
+│   ├── 12_unlock_bootloader.sh      # Manual only — not in run_all.sh
+│   └── run_all.sh
+└── droidian/                         # Droidian porting workspace
+    ├── PORTING_GUIDE.md              # Step-by-step Droidian porting guide
+    ├── kernel/
+    │   ├── kernel-info.mk            # Boot parameters for Droidian build
+    │   └── fixup-mountpoints.patch   # Halium partition fixups
+    └── adaptation/
+        ├── debian/                   # Debian packaging for adaptation
+        └── sparse/                   # Device-specific system files
 ```
 
 During execution, the pipeline creates working output folders such as:

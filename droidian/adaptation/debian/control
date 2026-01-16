@@ -1,0 +1,22 @@
+Source: adaptation-teclast-p20hd
+Section: metapackages
+Priority: optional
+Maintainer: ex1tium <ex1tium@outlook.com>
+Build-Depends: debhelper-compat (= 13)
+Standards-Version: 4.6.0
+
+Package: adaptation-teclast-p20hd
+Architecture: arm64
+Depends: ${misc:Depends},
+         adaptation-droidian-base,
+         linux-image-4.14-133-teclast-p20hd,
+         linux-headers-4.14-133-teclast-p20hd,
+Description: Droidian adaptation for Teclast P20HD (s9863a1h10)
+ Device-specific configuration and integration for the Teclast P20HD
+ tablet running Droidian.
+ .
+ Device specifications:
+  - SoC: Unisoc SC9863A (Sharkl3)
+  - GPU: PowerVR GE8322 / IMG8322
+  - Display: 10.1" 800x1280 IPS (ILI9881C/JD9365)
+  - Touch: FocalTech FT5436

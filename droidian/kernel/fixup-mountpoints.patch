@@ -1,0 +1,53 @@
+# Fixup Mountpoints Patch for Teclast P20HD (s9863a1h10)
+#
+# This patch must be applied to the Halium hybris-boot repository
+# File: hybris-boot/fixup-mountpoints
+#
+# The fixup-mountpoints script converts /dev/block/by-name/* symlinks
+# to literal device nodes, which is required for systemd to work properly.
+#
+# Device block path prefix: /dev/block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/
+#
+# Add this section to fixup-mountpoints script under the appropriate case statement:
+
+# -----------------------------------------------------------------------------
+# Add to fixup-mountpoints (in hybris-boot repo)
+# -----------------------------------------------------------------------------
+
+    "s9863a1h10"|"teclast_p20hd"|"N6H1")
+        sed -i \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/boot mmcblk0p30 ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/system mmcblk0p?? ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/vendor mmcblk0p?? ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/product mmcblk0p?? ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/userdata mmcblk0p?? ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/metadata mmcblk0p?? ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/super mmcblk0p?? ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/vbmeta mmcblk0p?? ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/vbmeta_system mmcblk0p?? ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/vbmeta_vendor mmcblk0p?? ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/dtbo mmcblk0p?? ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/misc mmcblk0p?? ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/cache mmcblk0p?? ' \
+            -e 's block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/prodnv mmcblk0p?? ' \
+            "$@"
+        ;;
+
+# -----------------------------------------------------------------------------
+# TODO: Get actual partition numbers
+# -----------------------------------------------------------------------------
+# Run on device with ADB to get partition layout:
+#
+#   adb shell ls -la /dev/block/platform/soc/soc:ap-ahb/20600000.sdio/by-name/
+#
+# Or check /proc/partitions:
+#
+#   adb shell cat /proc/partitions
+#
+# Replace the ?? placeholders with actual partition numbers (e.g., mmcblk0p31)
+#
+# Example output format you're looking for:
+#   boot -> /dev/block/mmcblk0p30
+#   system -> /dev/block/mmcblk0p44
+#   vendor -> /dev/block/mmcblk0p45
+#   etc.
