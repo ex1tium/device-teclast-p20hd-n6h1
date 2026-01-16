@@ -329,4 +329,41 @@ echo "Logs live in: ${LOG_DIR}"
 echo "State files:  ${STATE_DIR}"
 hr
 
+# -----------------------------------------------------------------------------
+# Next Steps Guidance
+# -----------------------------------------------------------------------------
+echo ""
+echo "${BOLD}═══════════════════════════════════════════════════════════════${RESET}"
+echo "${BOLD}                    NEXT STEPS: BOOTLOADER UNLOCK              ${RESET}"
+echo "${BOLD}═══════════════════════════════════════════════════════════════${RESET}"
+echo ""
+echo "The extraction pipeline is complete. To proceed with postmarketOS porting,"
+echo "you need to unlock the bootloader."
+echo ""
+echo "${YELLOW}WARNING: Bootloader unlock WIPES ALL USER DATA!${RESET}"
+echo ""
+echo "${BOLD}Prerequisites:${RESET}"
+echo "  1. Download modified_fastboot.zip from:"
+echo "     ${BLUE}https://www.hovatek.com/forum/thread-32287.html${RESET}"
+echo ""
+echo "  2. Place the zip file at:"
+echo "     ${DIM}tools/[Hovatek] modified_fastboot.zip${RESET}"
+echo ""
+echo "  3. Enable OEM unlock on device:"
+echo "     Settings > Developer Options > OEM unlocking"
+echo ""
+echo "${BOLD}Commands:${RESET}"
+echo "  ${GREEN}# Check bootloader status (safe, no changes)${RESET}"
+echo "  bash scripts/12_unlock_bootloader.sh --check"
+echo ""
+echo "  ${GREEN}# Perform bootloader unlock${RESET}"
+echo "  bash scripts/12_unlock_bootloader.sh"
+echo ""
+echo "${BOLD}After unlocking:${RESET}"
+echo "  - Build postmarketOS boot image"
+echo "  - Test with: fastboot boot boot-pmos.img (RAM only, safe)"
+echo "  - ${YELLOW}Only after confirming boot works:${RESET} fastboot flash boot boot-pmos.img" <- POTENTIALLY BRICKS THE DEVICE. BE CAREFUL.
+echo ""
+hr
+
 exit 0
