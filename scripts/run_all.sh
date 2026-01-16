@@ -98,11 +98,13 @@ STEPS=(
   "03|03_unpack_super_img.sh|Unpack super.img (dynamic partitions) via lpunpack"
   "04|04_extract_vendor_blobs.sh|Extract vendor blobs for bringup"
   "05|05_collect_device_info.sh|Collect device runtime info via ADB (Android Debug Bridge — USB device communication)"
-  "06|06_extract_kernel_info.sh|Extract kernel strings/config hints"
+  "06|06_extract_bootimg_info.sh|Extract boot.img header + kernel version for mkbootimg"
   "07|07_extract_vbmeta_info.sh|Parse vbmeta images (Android Verified Boot metadata)"
   "08|08_split_dtbo_overlays.sh|Split dtbo.img overlays (Device Tree Blob Overlays)"
   "09|09_extract_ramdisk_init.sh|Extract init/fstab/ueventd from ramdisk"
-  "10|10_bringup_report.sh|Generate bringup report summary"
+  "10|11_bringup_report.sh|Generate bringup report summary"
+  # Note: 10_fastboot_info.sh excluded from pipeline (Unisoc bootloader returns no data)
+  # Run manually if needed: bash scripts/10_fastboot_info.sh [--unlock]
 )
 
 step_ge() { local a="$1" b="$2"; ((10#$a >= 10#$b)); }

@@ -50,6 +50,18 @@ adb shell cat /proc/cmdline 2>/dev/null | tee "$OUTDIR/proc_cmdline.txt" >/dev/n
 echo "[*] Collecting partition layout..."
 adb shell ls -la /dev/block/by-name/ 2>/dev/null | tee "$OUTDIR/partition_layout.txt" >/dev/null || true
 
+echo "[*] Collecting partition sizes (/proc/partitions)..."
+adb shell cat /proc/partitions 2>/dev/null | tee "$OUTDIR/partition_sizes.txt" >/dev/null || true
+
+echo "[*] Collecting block device info (lsblk)..."
+adb shell lsblk 2>/dev/null | tee "$OUTDIR/lsblk.txt" >/dev/null || true
+
+echo "[*] Collecting filesystem types (blkid may need root)..."
+adb shell blkid 2>/dev/null | tee "$OUTDIR/blkid.txt" >/dev/null || true
+
+echo "[*] Collecting mount info..."
+adb shell mount 2>/dev/null | tee "$OUTDIR/mount_info.txt" >/dev/null || true
+
 echo "[*] Collecting input device info (touchscreen hints)..."
 adb shell ls -la /sys/class/input/ 2>/dev/null | tee "$OUTDIR/input_devices.txt" >/dev/null || true
 

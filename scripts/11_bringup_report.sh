@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # -----------------------------------------------------------------------------
-# 10_bringup_report.sh
+# 11_bringup_report.sh
 #
 # Generate a single Markdown bringup report for postmarketOS porting work.
 # Idempotent: overwrites the report every run.
@@ -216,10 +216,17 @@ BACKUP_DIR="${PROJECT_DIR}/backup"
 # Device-info paths (from ADB collection)
 DEVICE_INFO_DIR="${PROJECT_DIR}/device-info"
 PARTITION_LAYOUT_TXT="${DEVICE_INFO_DIR}/partition_layout.txt"
+PARTITION_SIZES_TXT="${DEVICE_INFO_DIR}/partition_sizes.txt"
 LOADED_MODULES_TXT="${DEVICE_INFO_DIR}/loaded_modules.txt"
 INPUT_DEVICES_TXT="${DEVICE_INFO_DIR}/input_devices.txt"
 DISPLAY_INFO_TXT="${DEVICE_INFO_DIR}/display_info.txt"
 SOC_INFO_TXT="${DEVICE_INFO_DIR}/soc_info.txt"
+
+# Boot image info paths (from 06_extract_bootimg_info.sh)
+BOOTIMG_INFO_DIR="${PROJECT_DIR}/extracted/bootimg_info"
+BOOT_HEADER_TXT="${BOOTIMG_INFO_DIR}/boot_header.txt"
+KERNEL_VERSION_TXT="${BOOTIMG_INFO_DIR}/kernel_version.txt"
+KERNEL_STRINGS_TXT="${BOOTIMG_INFO_DIR}/kernel_strings.txt"
 
 # -----------------------------------------------------------------------------
 # Generate report
@@ -253,6 +260,68 @@ SOC_INFO_TXT="${DEVICE_INFO_DIR}/soc_info.txt"
   SIMG2IMG_FOR_HELP="/usr/bin/simg2img"
   [[ -x "$SIMG2IMG_FOR_HELP" ]] || SIMG2IMG_FOR_HELP="$(command -v simg2img 2>/dev/null || echo simg2img)"
   safe_cmd "simg2img (Sparse image converter — converts Android sparse images to raw)" "$SIMG2IMG_FOR_HELP" --help
+
+  hr
+
+  h2 "Boot Image Analysis (critical for image repacking)"
+
+  if [[ -f "$BOOT_HEADER_TXT" ]]; then
+    echo "$(ok_mark) **Boot header parameters extracted**"
+    track_found "Boot image header"
+    echo ""
+
+    h3 "Boot Header Parameters"
+    echo ""
+    echo "These values are required for \`mkbootimg\` when building postmarketOS boot images:"
+    echo ""
+    {
+      grep -E '^(HEADER_VERSION|BASE|PAGESIZE|KERNEL_OFFSET|RAMDISK_OFFSET|TAGS_OFFSET|CMDLINE|RAMDISK_COMP|KERNEL_SIZE|RAMDISK_SIZE)=' "$BOOT_HEADER_TXT" 2>/dev/null || true
+    } | codeblock ""
+
+    h3 "mkbootimg Command Template"
+    echo ""
+    echo "Use this template for building postmarketOS boot images:"
+    echo ""
+    {
+      grep -A20 '^# mkbootimg reconstruction' "$BOOT_HEADER_TXT" 2>/dev/null | grep -v '^#' | grep -v '^$' || \
+      echo "# See boot_header.txt for full mkbootimg command"
+    } | codeblock "bash"
+  else
+    echo "$(warn_mark) **Boot header not extracted yet**"
+    track_warning "Boot image header (not extracted)"
+    echo ""
+    echo "Run: \`bash scripts/06_extract_bootimg_info.sh\`"
+    echo ""
+  fi
+
+  if [[ -f "$KERNEL_VERSION_TXT" && -s "$KERNEL_VERSION_TXT" ]]; then
+    KVER=$(head -1 "$KERNEL_VERSION_TXT")
+    if [[ "$KVER" != "N/A" ]]; then
+      echo "$(ok_mark) **Kernel version extracted**"
+      track_found "Kernel version"
+      echo ""
+      h3 "Stock Kernel Version"
+      echo ""
+      echo "$KVER" | codeblock ""
+
+      # Parse kernel version for quick reference
+      KVER_SHORT=$(echo "$KVER" | grep -oE '^Linux version [0-9]+\.[0-9]+\.[0-9]+' | sed 's/Linux version //' || echo "")
+      if [[ -n "$KVER_SHORT" ]]; then
+        echo "**Kernel:** \`$KVER_SHORT\` (Android downstream kernel)"
+        echo ""
+      fi
+    else
+      echo "$(warn_mark) **Kernel version could not be extracted**"
+      track_warning "Kernel version (extraction failed)"
+      echo ""
+    fi
+  else
+    echo "$(warn_mark) **Kernel version not extracted yet**"
+    track_warning "Kernel version (not extracted)"
+    echo ""
+    echo "Run: \`bash scripts/06_extract_bootimg_info.sh\`"
+    echo ""
+  fi
 
   hr
 
@@ -324,6 +393,15 @@ SOC_INFO_TXT="${DEVICE_INFO_DIR}/soc_info.txt"
         esac
       done
     echo ""
+
+    # Show partition sizes if available
+    if [[ -f "$PARTITION_SIZES_TXT" && -s "$PARTITION_SIZES_TXT" ]]; then
+      h3 "Partition Sizes (/proc/partitions)"
+      echo ""
+      echo "Raw partition sizes in 1K blocks (critical for rootfs planning):"
+      echo ""
+      cat "$PARTITION_SIZES_TXT" | codeblock ""
+    fi
   else
     echo "$(warn_mark) **Partition layout not collected** (device not connected during collection)"
     track_warning "Partition layout (not collected)"
@@ -635,8 +713,10 @@ SOC_INFO_TXT="${DEVICE_INFO_DIR}/soc_info.txt"
         # Check if vendor.img actually has modules (monolithic kernel check)
         VENDOR_IMG_FOR_CHECK="${PROJECT_DIR}/extracted/super_lpunpack/vendor.img"
         if [[ -f "$VENDOR_IMG_FOR_CHECK" ]] && command -v debugfs >/dev/null 2>&1; then
-          vendor_ko_count=$(debugfs -R "ls /lib/modules" "$VENDOR_IMG_FOR_CHECK" 2>/dev/null | grep -c '\.ko$' || echo "0")
-          if [[ "$vendor_ko_count" -gt 0 ]]; then
+          vendor_ko_count=$(debugfs -R "ls /lib/modules" "$VENDOR_IMG_FOR_CHECK" 2>/dev/null | grep -c '\.ko$' || true)
+          vendor_ko_count="${vendor_ko_count:-0}"
+          vendor_ko_count=$(echo "$vendor_ko_count" | tr -d '\n' | tr -d ' ')
+          if [[ "$vendor_ko_count" =~ ^[0-9]+$ ]] && [[ "$vendor_ko_count" -gt 0 ]]; then
             echo "$(warn_mark) **vendor/lib/modules exists but empty** (extraction limitation)"
             track_warning "Vendor kernel modules (extraction limited)"
             echo ""
@@ -837,8 +917,10 @@ SOC_INFO_TXT="${DEVICE_INFO_DIR}/soc_info.txt"
       # Check if vendor.img actually has modules (some devices use monolithic kernel)
       VENDOR_IMG="${PROJECT_DIR}/extracted/super_lpunpack/vendor.img"
       if [[ -f "$VENDOR_IMG" ]] && command -v debugfs >/dev/null 2>&1; then
-        vendor_has_modules=$(debugfs -R "ls /lib/modules" "$VENDOR_IMG" 2>/dev/null | grep -c '\.ko$' || echo "0")
-        if [[ "$vendor_has_modules" -gt 0 ]]; then
+        vendor_has_modules=$(debugfs -R "ls /lib/modules" "$VENDOR_IMG" 2>/dev/null | grep -c '\.ko$' || true)
+        vendor_has_modules="${vendor_has_modules:-0}"
+        vendor_has_modules=$(echo "$vendor_has_modules" | tr -d '\n' | tr -d ' ')
+        if [[ "$vendor_has_modules" =~ ^[0-9]+$ ]] && [[ "$vendor_has_modules" -gt 0 ]]; then
           ACTION_NEEDED=$((ACTION_NEEDED + 1))
           echo "#### $ACTION_NEEDED. Extract vendor kernel modules"
           echo ""
@@ -946,6 +1028,9 @@ SOC_INFO_TXT="${DEVICE_INFO_DIR}/soc_info.txt"
   # Check vbmeta
   vbmeta_count=$(find "${PROJECT_DIR}/backup" -maxdepth 1 -name "vbmeta*.img" 2>/dev/null | wc -l)
   [[ "$vbmeta_count" -gt 0 ]] && echo "| vbmeta images | \`backup/vbmeta*.img\` | ✅ ($vbmeta_count files) |" || echo "| vbmeta images | \`backup/vbmeta*.img\` | ❌ |"
+
+  # Boot image info
+  [[ -f "$BOOT_HEADER_TXT" ]] && echo "| Boot header info | \`extracted/bootimg_info/\` | ✅ |" || echo "| Boot header info | \`extracted/bootimg_info/\` | ❌ |"
 
   # Extracted dirs
   [[ -d "$DTB_DIR" ]] && dtb_files=$(find "$DTB_DIR" -name "*.dtb" 2>/dev/null | wc -l) && echo "| Extracted DTBs | \`extracted/dtb_from_bootimg/\` | ✅ ($dtb_files files) |" || echo "| Extracted DTBs | \`extracted/dtb_from_bootimg/\` | ❌ |"
