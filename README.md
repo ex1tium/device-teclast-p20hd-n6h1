@@ -508,7 +508,7 @@ Unlocking the bootloader is required to flash custom boot images (including post
 
 ```
 ╔══════════════════════════════════════════════════════════════════════════════╗
-║  ⚠️  BOOTLOADER UNLOCK PERMANENTLY WIPES ALL USER DATA                        ║
+║  ⚠️  BOOTLOADER UNLOCK PERMANENTLY WIPES ALL USER DATA                       ║
 ║                                                                              ║
 ║  • All apps, settings, and personal data will be erased                      ║
 ║  • Internal storage will be formatted                                        ║
