@@ -1,0 +1,4 @@
+[submodule "kernel/linux-teclast-p20hd"]
+	path = kernel/linux-teclast-p20hd
+	url = https://github.com/ex1tium/linux-teclast-p20hd.git
+	branch = p20hd
