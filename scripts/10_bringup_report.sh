@@ -103,6 +103,7 @@ safe_ls() {
   local path="$2"
   local maxlines="${3:-120}"
   local track_name="${4:-}"
+  local empty_ok="${5:-0}"  # Set to 1 if empty directory is expected (no warning)
   h3 "$title"
   if [[ -e "$path" ]]; then
     # Check if directory has actual content (recursively for nested structures)
@@ -113,6 +114,8 @@ safe_ls() {
       if [[ "$file_count" -gt 0 ]]; then
         echo "$(ok_mark) **Found** ($file_count files)"
         [[ -n "$track_name" ]] && track_found "$track_name" || true
+      elif [[ "$empty_ok" -eq 1 ]]; then
+        echo "$(info_mark) **Directory empty** (expected)"
       else
         echo "$(warn_mark) **Directory exists but empty**"
         [[ -n "$track_name" ]] && track_warning "$track_name (empty directory)" || true
@@ -462,11 +465,11 @@ SOC_INFO_TXT="${DEVICE_INFO_DIR}/soc_info.txt"
       echo "$(ok_mark) **init scripts found ($init_count files)**"
       track_found "Init scripts (init*.rc)"
     else
-      echo "$(warn_mark) **No init*.rc scripts in ramdisk** (normal for Android 10+ first_stage_mount)"
-      track_warning "Init scripts (empty - normal for A10+)"
+      # Expected for Android 10+ - use info marker, don't track as warning
+      echo "$(info_mark) **No init*.rc scripts in ramdisk** (normal for Android 10+ first_stage_mount)"
     fi
     echo ""
-    safe_ls "init scripts" "${RAMDISK_DIR}/init" 120
+    safe_ls "init scripts" "${RAMDISK_DIR}/init" 120 "" 1
 
     # Check fstab
     fstab_count=$(find "${RAMDISK_DIR}/fstab" -maxdepth 1 -type f 2>/dev/null | wc -l)
@@ -496,11 +499,11 @@ SOC_INFO_TXT="${DEVICE_INFO_DIR}/soc_info.txt"
       echo "$(ok_mark) **ueventd rules found ($ueventd_count files)**"
       track_found "ueventd rules"
     else
-      echo "$(warn_mark) **No ueventd*.rc in ramdisk** (normal for Android 10+ first_stage_mount)"
-      track_warning "ueventd rules (empty - normal for A10+)"
+      # Expected for Android 10+ - use info marker, don't track as warning
+      echo "$(info_mark) **No ueventd*.rc in ramdisk** (normal for Android 10+ first_stage_mount)"
     fi
     echo ""
-    safe_ls "ueventd rules" "${RAMDISK_DIR}/ueventd" 120
+    safe_ls "ueventd rules" "${RAMDISK_DIR}/ueventd" 120 "" 1
 
     # Grep a few high-signal keywords
     find_some "init: services summary (service …)" "${RAMDISK_DIR}/init" 'grep -R "^[[:space:]]*service " -n . | head -n 80' 80
@@ -656,7 +659,8 @@ SOC_INFO_TXT="${DEVICE_INFO_DIR}/soc_info.txt"
       track_missing "Vendor kernel modules"
     fi
     echo ""
-    safe_ls "vendor/lib/modules" "$mod_dir" 120
+    # Use empty_ok=1 since we already reported the status above
+    safe_ls "vendor/lib/modules" "$mod_dir" 120 "" 1
 
     # Check vintf
     vintf_dir="${VENDOR_BLOBS_DIR}/etc/vintf"

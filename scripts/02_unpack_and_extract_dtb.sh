@@ -64,11 +64,15 @@ ls -lh "$OUT_DTB" | head -n 80
 BACKUP_DIR="$PROJECT_DIR/backup"
 mkdir -p "$BACKUP_DIR"
 
-# Find the first/primary DTB (typically 00_kernel or first numbered DTB)
+# Find the first/primary DTB file (must be .dtb extension, NOT 00_kernel which is the kernel image)
 PRIMARY_DTB=""
-for candidate in "$OUT_DTB"/00_kernel "$OUT_DTB"/01_dtb "$OUT_DTB"/*.dtb; do
+PRIMARY_DTS=""
+for candidate in "$OUT_DTB"/*.dtb; do
   if [[ -f "$candidate" && -s "$candidate" ]]; then
     PRIMARY_DTB="$candidate"
+    # Check if matching DTS exists
+    candidate_dts="${candidate%.dtb}.dts"
+    [[ -f "$candidate_dts" ]] && PRIMARY_DTS="$candidate_dts"
     break
   fi
 done
@@ -77,23 +81,22 @@ if [[ -n "$PRIMARY_DTB" && -f "$PRIMARY_DTB" ]]; then
   echo "==> Copying primary DTB to backup/dtb-stock-trimmed.dtb"
   cp "$PRIMARY_DTB" "$BACKUP_DIR/dtb-stock-trimmed.dtb"
 
-  # Also decompile to DTS in backup for easy reference
-  echo "==> Decompiling backup DTB -> DTS..."
-  if command -v dtc >/dev/null 2>&1; then
+  # Copy or generate DTS in backup for easy reference
+  echo "==> Creating backup DTS..."
+  if [[ -n "$PRIMARY_DTS" && -f "$PRIMARY_DTS" ]]; then
+    # Prefer existing DTS (already decompiled during extraction)
+    echo "[*] Copying existing DTS: $PRIMARY_DTS"
+    cp "$PRIMARY_DTS" "$BACKUP_DIR/dtb-stock-trimmed.dts"
+  elif command -v dtc >/dev/null 2>&1; then
+    # Decompile from DTB
+    echo "[*] Decompiling DTB -> DTS..."
     dtc -I dtb -O dts -o "$BACKUP_DIR/dtb-stock-trimmed.dts" "$BACKUP_DIR/dtb-stock-trimmed.dtb" 2>/dev/null || true
   else
-    # Fallback: look for existing DTS from extraction
-    EXISTING_DTS=$(find "$OUT_DTB" -name "*.dts" -type f | head -1)
-    if [[ -n "$EXISTING_DTS" && -f "$EXISTING_DTS" ]]; then
-      echo "[*] dtc not found, copying existing DTS: $EXISTING_DTS"
-      cp "$EXISTING_DTS" "$BACKUP_DIR/dtb-stock-trimmed.dts"
-    else
-      echo "[!] dtc not found and no existing DTS to copy"
-    fi
+    echo "[!] No existing DTS and dtc not found - DTS will be missing"
   fi
 
-  echo "==> Backup DTB files:"
+  echo "==> Backup DTB/DTS files:"
   ls -lh "$BACKUP_DIR"/dtb-stock-trimmed.* 2>/dev/null || true
 else
-  echo "[!] Warning: Could not identify primary DTB to copy to backup/"
+  echo "[!] Warning: No .dtb files found in $OUT_DTB"
 fi
