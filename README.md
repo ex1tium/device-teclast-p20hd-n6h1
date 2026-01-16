@@ -56,11 +56,12 @@ Only the **`.rar`** firmware archive is required.
     ├── 03_unpack_super_img.sh
     ├── 04_extract_vendor_blobs.sh
     ├── 05_collect_device_info.sh
-    ├── 06_extract_kernel_info.sh
+    ├── 06_extract_bootimg_info.sh
     ├── 07_extract_vbmeta_info.sh
     ├── 08_split_dtbo_overlays.sh
     ├── 09_extract_ramdisk_init.sh
-    ├── 10_bringup_report.sh
+    ├── 11_bringup_report.sh
+    ├── 12_unlock_bootloader.sh      # Manual only — not in run_all.sh
     └── run_all.sh
 ```
 
@@ -379,7 +380,7 @@ Outputs are written under `device-info/`.
 
 ---
 
-### `scripts/06_extract_kernel_info.sh`
+### `scripts/06_extract_bootimg_info.sh`
 
 Extracts kernel bringup signals from the unpacked boot kernel:
 
@@ -429,7 +430,7 @@ Outputs are written under `extracted/ramdisk_init/`.
 
 ---
 
-### `scripts/10_bringup_report.sh`
+### `scripts/11_bringup_report.sh`
 
 Generates a consolidated Markdown bringup report:
 
@@ -445,6 +446,237 @@ Generates a consolidated Markdown bringup report:
 Output:
 
 * `reports/bringup_report.md`
+
+---
+
+### `scripts/12_unlock_bootloader.sh`
+
+Unlocks the bootloader on Unisoc SC9863A devices using the identifier token + signature method:
+
+* Extracts and sets up Hovatek modified fastboot tools (user must download separately)
+* Retrieves the device-specific identifier token via `fastboot oem get_identifier_token`
+* Generates an RSA-4096 signature using the Hovatek signing key
+* Sends the unlock command via `fastboot flashing unlock_bootloader signature.bin`
+
+**This script is NOT run by `run_all.sh`** — it requires manual execution due to the destructive nature of bootloader unlocking (wipes all user data).
+
+See [Bootloader Unlock](#bootloader-unlock-unisoc-sc9863a) for complete documentation.
+
+---
+
+## External Resources (Not Distributed)
+
+Due to copyright and licensing restrictions, certain resources required for this project **cannot be distributed** in this repository. Users must download these manually from official sources.
+
+### Required External Downloads
+
+| Resource | Purpose | Download Location |
+|----------|---------|-------------------|
+| **Teclast Firmware (.rar)** | Official Android firmware for extraction | [Teclast Firmware Portal](https://www.teclast.com/en/firmware/shopifyfchk.php?c=n6h1) |
+| **Hovatek Modified Fastboot** | Bootloader unlock tools for Unisoc devices | [Hovatek Forum Thread #32287](https://www.hovatek.com/forum/thread-32287.html) |
+
+### Firmware Download
+
+Download the official firmware from Teclast:
+
+```text
+https://www.teclast.com/en/firmware/shopifyfchk.php?c=n6h1
+```
+
+Example filename: `P20HD(N6H1)_Android10.0_EEA_V1.07_20211023.rar`
+
+Place the `.rar` file in the project root directory.
+
+### Hovatek Modified Fastboot (for Bootloader Unlock)
+
+The standard Android `fastboot` binary does not support Unisoc/Spreadtrum bootloader unlock commands. A modified fastboot is required.
+
+**Download:** [Hovatek Forum - Modified Fastboot for Unisoc](https://www.hovatek.com/forum/thread-32287.html)
+
+1. Download `[Hovatek] modified_fastboot.zip`
+2. Place the zip file at: `tools/[Hovatek] modified_fastboot.zip`
+
+The `12_unlock_bootloader.sh` script will extract and configure the tools automatically.
+
+---
+
+## Bootloader Unlock (Unisoc SC9863A)
+
+Unlocking the bootloader is required to flash custom boot images (including postmarketOS). This section documents the complete bootloader unlock process for Unisoc SC9863A devices.
+
+### Important Warnings
+
+```
+╔══════════════════════════════════════════════════════════════════════════════╗
+║  ⚠️  BOOTLOADER UNLOCK PERMANENTLY WIPES ALL USER DATA                        ║
+║                                                                              ║
+║  • All apps, settings, and personal data will be erased                      ║
+║  • Internal storage will be formatted                                        ║
+║  • This action cannot be undone — backup everything first!                   ║
+╚══════════════════════════════════════════════════════════════════════════════╝
+```
+
+### How Unisoc Bootloader Unlock Works
+
+Unlike Qualcomm or MediaTek devices, Unisoc (Spreadtrum) bootloaders use a **token + signature** unlock method:
+
+1. **Get Identifier Token**: The bootloader provides a device-unique 32-byte hex token
+2. **Sign the Token**: The token is signed with an RSA-4096 private key
+3. **Send Signature**: The signature file is sent to unlock the bootloader
+
+**Standard fastboot commands DO NOT work on Unisoc:**
+- ❌ `fastboot flashing unlock` — Not supported
+- ❌ `fastboot oem unlock` — Not supported
+- ❌ `fastboot getvar all` — Returns nothing on Unisoc
+- ❌ `fastboot getvar unlocked` — Not supported
+
+**Unisoc-specific commands (require modified fastboot):**
+- ✅ `fastboot oem get_identifier_token` — Returns the unlock token
+- ✅ `fastboot flashing unlock_bootloader signature.bin` — Performs unlock
+
+### Prerequisites
+
+#### 1. Enable OEM Unlock on Device
+
+On the Android device:
+1. Go to **Settings** → **System** → **Developer options**
+2. Enable **OEM unlocking**
+   - If grayed out, ensure you have an internet connection and wait 7 days after first device setup (Google's anti-theft measure)
+
+#### 2. Download Hovatek Modified Fastboot
+
+1. Visit: [https://www.hovatek.com/forum/thread-32287.html](https://www.hovatek.com/forum/thread-32287.html)
+2. Download `[Hovatek] modified_fastboot.zip`
+3. Place in project: `tools/[Hovatek] modified_fastboot.zip`
+
+#### 3. Ensure ADB/Fastboot Access
+
+```bash
+# Verify ADB connection
+adb devices -l
+
+# Reboot to fastboot mode
+adb reboot bootloader
+
+# OR: Power off, then hold Volume Down + Power until fastboot screen appears
+```
+
+### Unlock Procedure
+
+#### Step 1: Check Current Bootloader Status (Safe)
+
+```bash
+bash scripts/12_unlock_bootloader.sh --check
+```
+
+This safely checks if the bootloader is already unlocked without making any changes.
+
+#### Step 2: Perform Bootloader Unlock
+
+```bash
+bash scripts/12_unlock_bootloader.sh
+```
+
+The script will:
+1. Extract Hovatek tools from the downloaded zip
+2. Delete any pre-existing signature.bin (must be regenerated per-device)
+3. Request the identifier token from the bootloader
+4. Generate a device-specific signature using RSA-4096 signing
+5. Send the unlock command
+6. Prompt you to confirm on the device (Volume Down to confirm)
+
+#### Step 3: Confirm on Device
+
+When prompted on the tablet screen:
+- Press **Volume Down** to confirm unlock
+- The device will erase all user data and reboot
+- This takes about 10-15 minutes wait patiently until reboot to Android setup.
+
+### Script Options
+
+```bash
+# Check bootloader status only (no changes)
+bash scripts/12_unlock_bootloader.sh --check
+
+# Perform full unlock process
+bash scripts/12_unlock_bootloader.sh
+
+# Skip status check and go directly to unlock
+bash scripts/12_unlock_bootloader.sh --skip-check
+
+# Show help
+bash scripts/12_unlock_bootloader.sh --help
+```
+
+### Verification
+
+After unlock completes, the device will:
+1. Display "LOCK FLAG IS: UNLOCK" warning at boot
+2. Wipe all user data and reboot to initial setup
+
+Verify unlock status:
+```bash
+adb reboot bootloader
+bash scripts/12_unlock_bootloader.sh --check
+```
+
+### Troubleshooting Bootloader Unlock
+
+#### "Modified fastboot zip not found"
+
+**Fix:** Download from Hovatek and place at `tools/[Hovatek] modified_fastboot.zip`
+
+#### "Device not in fastboot mode"
+
+**Fix:**
+```bash
+adb reboot bootloader
+# OR: Power off → Hold Volume Down + Power
+```
+
+#### "FAILED (remote: unknown command)"
+
+**Cause:** Using standard fastboot instead of Hovatek modified version.
+
+**Fix:** Ensure the script is using `tools/hovatek_fastboot/fastboot` not system fastboot.
+
+#### Identifier token not captured
+
+**Cause:** Device not responding or wrong mode.
+
+**Fix:**
+1. Ensure device shows "FASTBOOT MODE" on screen
+2. Try unplugging and replugging USB cable
+3. Use `lsusb` to verify device is detected
+
+#### Signature verification failed
+
+**Cause:** Token/signature mismatch or corrupted signature.
+
+**Fix:** The script regenerates signature.bin each run. If issues persist, manually delete `tools/hovatek_fastboot/signature.bin` and retry.
+
+### Post-Unlock: Next Steps
+
+After successfully unlocking the bootloader:
+
+1. **Test boot image in RAM (safe, non-persistent):**
+   ```bash
+   fastboot boot boot-pmos.img
+   ```
+
+2. **Only after confirming boot works**, flash permanently:
+   ```bash
+   # ⚠️ CAUTION: This modifies the device permanently
+   fastboot flash boot boot-pmos.img
+   ```
+
+3. **To re-lock bootloader** (restores stock security):
+   ```bash
+   fastboot flashing lock
+   ```
+   ⚠️ Only re-lock with stock firmware! Re-locking with custom firmware WILL MOST LIKELY brick the device.
+
+   DO NOT FLASH OR LOCK UNLESS 100% SURE OF WHAT YOU ARE DOING. RAM BOOT IS SAFE.
 
 ---
 
@@ -553,11 +785,12 @@ For the **best possible bringup report**, ensure:
 | 03_unpack_super_img.sh | No | Yes (super.img) | Needs `lpunpack`, `simg2img` |
 | 04_extract_vendor_blobs.sh | No | Yes (vendor.img) | May need `sudo` for best results |
 | 05_collect_device_info.sh | **Yes** | No | Collects runtime device data |
-| 06_extract_kernel_info.sh | No | Yes (boot.img) | Analyzes kernel binary |
+| 06_extract_bootimg_info.sh | No | Yes (boot.img) | Analyzes kernel binary |
 | 07_extract_vbmeta_info.sh | No | Yes (vbmeta*.img) | Parses AVB metadata |
 | 08_split_dtbo_overlays.sh | No | Yes (dtbo.img) | Needs `dtc` |
 | 09_extract_ramdisk_init.sh | No | Yes (ramdisk) | Extracts init configs |
-| 10_bringup_report.sh | Optional | Yes | Generates final report |
+| 11_bringup_report.sh | Optional | Yes | Generates final report |
+| 12_unlock_bootloader.sh | **Yes** (fastboot) | No | Needs Hovatek tools (see [External Resources](#external-resources-not-distributed)) |
 
 ---
 
@@ -576,3 +809,4 @@ After a successful run, the extraction layout typically includes:
 * `device-info/...`
 * `reports/bringup_report.md`
 * `logs/*.log`
+* `tools/hovatek_fastboot/` — Extracted Hovatek tools (after running `12_unlock_bootloader.sh`)
