@@ -2,6 +2,27 @@
 
 This repository contains a **bringup extraction pipeline** and **Droidian porting workspace** for the **Teclast P20HD EEA** tablet (**N6H1**, **Unisoc SC9863A / s9863a1h10**).
 
+---
+
+## ⚠️ Critical Finding: Unisoc Secure Boot
+
+**Unlocking the bootloader is NOT enough to flash custom images on Unisoc devices.**
+
+Even with an unlocked bootloader, the Unisoc SC9863A **still enforces cryptographic signature verification** on boot, vbmeta, and other partitions. Simply flashing an unsigned boot image will result in a **bootloop or boot failure**.
+
+### Solution: AVB-Signed Images
+
+Custom boot images must be:
+1. **Signed with a matching private key**
+2. **Accompanied by a custom vbmeta** that references the signing key
+3. **vbmeta must be exactly 1 MiB** (Unisoc-specific requirement)
+
+We have confirmed that the **leaked Hovatek `rsa4096_vbmeta.pem`** key matches the P20HD's vbmeta signer, enabling us to create properly signed images.
+
+**See [docs/UNISOC_AVB_SIGNING.md](docs/UNISOC_AVB_SIGNING.md) for complete signing documentation.**
+
+---
+
 ## Current Focus: Droidian
 
 The project is actively working toward a **Droidian** port (Debian-based mobile Linux using Android HAL via libhybris). The extraction pipeline provides the foundation for kernel building and device adaptation.
@@ -19,11 +40,18 @@ The project is actively working toward a **Droidian** port (Debian-based mobile 
 
 ### Current Status
 
-The kernel has been compiled successfully and the custom Droidian boot image was flashed. The first boot test resulted in a bootloop, indicating the boot image loads but crashes. Currently investigating:
+The kernel has been compiled successfully and AVB-signed boot images have been generated. First boot test with unsigned images resulted in bootloop due to AVB signature verification (see critical finding above).
 
-1. **Unisoc-specific flashing methods** - Standard fastboot may not properly handle Unisoc partition requirements
-2. **Image signing** - Unisoc bootloaders verify signatures; investigating how to properly sign boot/vbmeta images
-3. **vbmeta size requirements** - Unisoc SC9863A requires vbmeta images to be **exactly 1 MiB (1,048,576 bytes)**
+**Completed:**
+- ✅ Kernel compiled (Samsung A03 Core kernel, p20hd branch)
+- ✅ Identified AVB signing requirements for Unisoc SC9863A
+- ✅ Verified Hovatek leaked key matches device's vbmeta signer
+- ✅ Created signing toolchain (`scripts/13_sign_boot_avb.sh`)
+- ✅ Generated signed `boot-droidian-signed.img` and matching `vbmeta-custom.img`
+
+**Next:**
+- Flash signed boot image and custom vbmeta for second boot test
+- Debug kernel/initramfs if boot fails
 
 **Key learnings:**
 - This device has **NO hardware button combination** for fastboot mode
@@ -32,8 +60,11 @@ The kernel has been compiled successfully and the custom Droidian boot image was
 - The Linux `spd_dump` tool works for small partitions but struggles with the 3GB super partition
 - vbmeta images must be exactly 1 MiB or flashing hangs indefinitely
 - Full recovery may require **Windows SPD Flash Tool** with the original PAC firmware
+- **Secure Boot remains active after bootloader unlock** — images must be AVB-signed
 
-See [docs/PHASE3_FIRST_BOOT.md](docs/PHASE3_FIRST_BOOT.md) for the complete first boot guide and recovery procedures.
+See [docs/UNISOC_AVB_SIGNING.md](docs/UNISOC_AVB_SIGNING.md) for the complete AVB signing guide.
+
+See [docs/PHASE3_FIRST_BOOT.md](docs/PHASE3_FIRST_BOOT.md) for the first boot guide and recovery procedures.
 
 See [droidian/PORTING_GUIDE.md](droidian/PORTING_GUIDE.md) for the full porting roadmap.
 
@@ -115,7 +146,16 @@ Only the **`.rar`** firmware archive is required.
 │   ├── 09_extract_ramdisk_init.sh
 │   ├── 11_bringup_report.sh
 │   ├── 12_unlock_bootloader.sh       # Manual only — not in run_all.sh
+│   ├── 13_sign_boot_avb.sh           # Manual only — AVB signing for Unisoc
 │   └── run_all.sh
+├── docs/                             # Documentation
+│   ├── PHASE3_FIRST_BOOT.md          # First boot testing guide
+│   └── UNISOC_AVB_SIGNING.md         # ⚠️ Critical: AVB signing requirements
+├── tools/                            # Helper tools
+│   ├── hovatek_fastboot/             # Bootloader unlock tools (rsa4096_vbmeta.pem)
+│   └── avb_signing/                  # AVB signing keys and outputs
+├── kernel/                           # Kernel submodule
+│   └── linux-teclast-p20hd/          # Samsung A03 Core kernel (p20hd branch)
 └── droidian/                         # ← ACTIVE PORTING WORKSPACE
     ├── PORTING_GUIDE.md              # Step-by-step Droidian porting guide
     ├── kernel/
@@ -522,6 +562,26 @@ Unlocks the bootloader on Unisoc SC9863A devices using the identifier token + si
 **This script is NOT run by `run_all.sh`** — it requires manual execution due to the destructive nature of bootloader unlocking (wipes all user data).
 
 See [Bootloader Unlock](#bootloader-unlock-unisoc-sc9863a) for complete documentation.
+
+---
+
+### `scripts/13_sign_boot_avb.sh`
+
+Signs boot images and creates custom vbmeta for Unisoc SC9863A devices:
+
+* Auto-generates a custom boot signing keypair (RSA-4096) if not present
+* Adds AVB hash footer to the boot image using `avbtool`
+* Creates a custom vbmeta signed with the leaked Hovatek key
+* Sets the boot chain partition to reference our custom public key
+* Pads vbmeta to exactly 1 MiB (Unisoc requirement)
+
+**This script is NOT run by `run_all.sh`** — it requires the boot image to be built first and is part of the flashing workflow.
+
+**Output files:**
+* `out/boot-droidian-signed.img` — AVB-signed boot image
+* `out/vbmeta-custom.img` — Custom vbmeta (1 MiB, properly padded)
+
+See [docs/UNISOC_AVB_SIGNING.md](docs/UNISOC_AVB_SIGNING.md) for complete AVB signing documentation.
 
 ---
 
