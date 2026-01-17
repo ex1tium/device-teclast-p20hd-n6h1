@@ -319,6 +319,40 @@ if [[ -d "$PMAPORTS_DIR/.git" ]]; then
   git_set_remote_if_needed "$PMAPORTS_DIR" "origin" "$PMAPORTS_REPO"
 fi
 
+# -----------------------------------------------------------------------------
+# spd_dump (Spreadtrum/Unisoc low-level flash tool for Linux)
+# Used for recovery when device is stuck in BROM/download mode
+# https://github.com/ilyakurdyukov/spreadtrum_flash
+# -----------------------------------------------------------------------------
+SPD_DUMP_REPO="https://github.com/ilyakurdyukov/spreadtrum_flash.git"
+SPD_DUMP_DIR="$PROJECT_DIR/tools/spreadtrum_flash"
+
+echo ""
+echo "==> Setting up spd_dump (Spreadtrum/Unisoc low-level flash tool)..."
+git_clone_or_update "$SPD_DUMP_REPO" "$SPD_DUMP_DIR" "" "spreadtrum_flash (spd_dump)"
+
+if [[ -d "$SPD_DUMP_DIR" ]]; then
+  echo "[*] Building spd_dump..."
+  ( cd "$SPD_DUMP_DIR" && make ) || echo "WARNING: spd_dump build failed, may need manual intervention"
+
+  if [[ -f "$SPD_DUMP_DIR/spd_dump" ]]; then
+    echo "[*] Installing spd_dump to ~/.local/bin ..."
+    install -m 0755 "$SPD_DUMP_DIR/spd_dump" "$HOME/.local/bin/spd_dump"
+  fi
+fi
+
+# -----------------------------------------------------------------------------
+# CVE-2022-38694 Unisoc bootloader unlock/bypass tool
+# Used for bypassing vbmeta signature verification on Unisoc devices
+# https://github.com/TomKing062/CVE-2022-38694_unlock_bootloader
+# -----------------------------------------------------------------------------
+CVE_UNLOCK_REPO="https://github.com/TomKing062/CVE-2022-38694_unlock_bootloader.git"
+CVE_UNLOCK_DIR="$PROJECT_DIR/tools/CVE-2022-38694_unlock_bootloader"
+
+echo ""
+echo "==> Setting up CVE-2022-38694 unlock tool (Unisoc signature bypass)..."
+git_clone_or_update "$CVE_UNLOCK_REPO" "$CVE_UNLOCK_DIR" "" "CVE-2022-38694_unlock_bootloader"
+
 echo ""
 echo "[7/7] Verification"
 echo -n "ADB (Android Debug Bridge — USB device communication) version: "
@@ -344,6 +378,9 @@ command -v lpmake || echo "(missing; not fatal for extraction)"
 
 echo -n "pmbootstrap (postmarketOS build tool) version: "
 pmbootstrap --version 2>/dev/null || echo "(pmbootstrap installed; restart shell if needed)"
+
+echo -n "spd_dump (Spreadtrum/Unisoc flash tool) path: "
+command -v spd_dump || echo "(missing; check tools/spreadtrum_flash)"
 
 echo ""
 echo "=== Setup complete ==="

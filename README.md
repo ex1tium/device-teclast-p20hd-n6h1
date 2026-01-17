@@ -13,9 +13,27 @@ The project is actively working toward a **Droidian** port (Debian-based mobile 
 | Device tree extracted | **Done** |
 | Vendor blobs cataloged | **Done** |
 | Droidian adaptation skeleton | **Done** |
-| Kernel source | **Pending** (targeting Samsung A03 Core kernel) |
-| Kernel compilation | **Pending** |
-| First boot test | **Pending** |
+| Kernel source | **Done** (Samsung A03 Core kernel, p20hd branch) |
+| Kernel compilation | **Done** (builds successfully) |
+| First boot test | **In Progress** (device recovery needed) |
+
+### Current Status
+
+The kernel has been compiled successfully and the custom Droidian boot image was flashed. The first boot test resulted in a bootloop, indicating the boot image loads but crashes. Currently investigating:
+
+1. **Unisoc-specific flashing methods** - Standard fastboot may not properly handle Unisoc partition requirements
+2. **Image signing** - Unisoc bootloaders verify signatures; investigating how to properly sign boot/vbmeta images
+3. **vbmeta size requirements** - Unisoc SC9863A requires vbmeta images to be **exactly 1 MiB (1,048,576 bytes)**
+
+**Key learnings:**
+- This device has **NO hardware button combination** for fastboot mode
+- `fastboot boot` (RAM boot) returns **protocol error** — not supported on this device
+- Recovery requires **SPD Download Mode** (USB ID `1782:4d00`)
+- The Linux `spd_dump` tool works for small partitions but struggles with the 3GB super partition
+- vbmeta images must be exactly 1 MiB or flashing hangs indefinitely
+- Full recovery may require **Windows SPD Flash Tool** with the original PAC firmware
+
+See [docs/PHASE3_FIRST_BOOT.md](docs/PHASE3_FIRST_BOOT.md) for the complete first boot guide and recovery procedures.
 
 See [droidian/PORTING_GUIDE.md](droidian/PORTING_GUIDE.md) for the full porting roadmap.
 
@@ -702,15 +720,18 @@ adb reboot bootloader
 
 After successfully unlocking the bootloader:
 
-1. **Test boot image in RAM (safe, non-persistent):**
+1. ~~**Test boot image in RAM (safe, non-persistent):**~~ **NOT SUPPORTED**
    ```bash
+   # This does NOT work on P20HD - returns protocol error
    fastboot boot boot-pmos.img
    ```
+   > ⚠️ The Unisoc bootloader on this device does not support RAM boot. You must flash directly.
 
-2. **Only after confirming boot works**, flash permanently:
+2. **Flash boot image** (requires SPD recovery tools ready):
    ```bash
    # ⚠️ CAUTION: This modifies the device permanently
-   fastboot flash boot boot-pmos.img
+   # Have SPD Flash Tool ready before attempting!
+   fastboot flash boot boot-droidian.img
    ```
 
 3. **To re-lock bootloader** (restores stock security):
@@ -719,7 +740,7 @@ After successfully unlocking the bootloader:
    ```
    ⚠️ Only re-lock with stock firmware! Re-locking with custom firmware WILL MOST LIKELY brick the device.
 
-   DO NOT FLASH OR LOCK UNLESS 100% SURE OF WHAT YOU ARE DOING. RAM BOOT IS SAFE.
+   DO NOT FLASH OR LOCK UNLESS 100% SURE OF WHAT YOU ARE DOING. ALWAYS HAVE SPD RECOVERY READY.
 
 ---
 
